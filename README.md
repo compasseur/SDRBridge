@@ -2,7 +2,7 @@ SDRBridge acts as a driver for the Airspy Mini and HackRF One SDR.
 
 It works the same way as the rtl_tcp driver by [SignalWareLtd](https://github.com/signalwareltd/rtl_tcp_andro-)
 
-The driver connects to the SDR and then send the IQ samples through a local TCP server.
+The driver connects to the SDR and then sends the IQ samples through a local TCP server.
 To start the driver from a client app, launch an intent :
 
 ```kotlin
@@ -32,4 +32,12 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
 
 
 You can find the possible commands in the Commands.kt file.
+
+When using a HackRF One, is is not possible to use the driver for transmitting ; it can only receive.
+
+When using an Airspy Mini, the driver can only send Raw samples at the moment.
+
+The driver allows to specifiy a custom packet size for receiving samples (both Airspy and HackRF).
+
+
 
