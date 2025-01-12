@@ -168,46 +168,6 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
         }
     }
 
-
-    /*private fun showAbout() {
-        val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF")
-        AlertDialog.Builder(this).apply {
-            setTitle("About")
-            setItems(listOfChoices) { dialogInterface, i ->
-                when (i) {
-                    0 -> {
-                        try {
-                            val intentWeb = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/compasseur/SDRBridge"))
-                            startActivity(intentWeb)
-                        } catch (e: Exception) {
-                            Toast.makeText(this@MainActivity, "Could not load the browser.\nYou can go to github.com/compasseur/SDRBridge.", Toast.LENGTH_LONG).show()
-                        }
-                    }
-
-                    1 -> {
-                        AlertDialog.Builder(this@MainActivity).apply {
-                            setTitle("Airspy license")
-                            setMessage(getString(R.string.airspy_license))
-                            setPositiveButton("OK") { _, _ -> }
-                        }.create().show()
-                    }
-
-                    else -> {
-                        AlertDialog.Builder(this@MainActivity).apply {
-                            setTitle("HackRF license")
-                            setMessage(getString(R.string.hackrf_license))
-                            setPositiveButton("OK") { _, _ -> }
-                        }.create().show()
-                    }
-                }
-                dialogInterface.dismiss()
-            }
-            setNeutralButton("Dismiss") { dialog, _ ->
-                dialog.cancel()
-            }
-        }.create().show()
-    }*/
-
     private fun showAbout() {
         val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "Compasseur")
         AlertDialog.Builder(this).apply {
