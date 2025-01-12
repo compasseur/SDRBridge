@@ -1,7 +1,7 @@
 package com.compasseur.sdrbridge.rfsource
 
 import android.util.Log
-import com.compasseur.sdrbridge.sources.Airspy
+import com.compasseur.sdrbridge.rfsource.Airspy
 import java.lang.Exception
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit

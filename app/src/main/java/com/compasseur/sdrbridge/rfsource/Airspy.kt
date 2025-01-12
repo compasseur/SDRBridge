@@ -1,4 +1,4 @@
-package com.compasseur.sdrbridge.sources
+package com.compasseur.sdrbridge.rfsource
 
 import android.content.Context
 import android.hardware.usb.UsbConstants
@@ -10,9 +10,6 @@ import android.hardware.usb.UsbManager
 import android.hardware.usb.UsbRequest
 import android.util.Log
 import com.compasseur.sdrbridge.LogParameters
-import com.compasseur.sdrbridge.rfsource.RfSource
-import com.compasseur.sdrbridge.rfsource.RfSourceCallbackInterface
-import com.compasseur.sdrbridge.rfsource.RfSourceException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -243,44 +240,6 @@ class Airspy
         return this.queue!!
     }
 
-    /*override suspend fun receiveLoop() {
-        val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
-        var buffer: ByteBuffer
-
-        try {
-            // Initialize and queue all USB requests
-            for (i in 0 until numUsbRequests) {
-                buffer = ByteBuffer.wrap(this.getBufferFromBufferPool())
-                usbRequests[i] = UsbRequest().apply {
-                    initialize(usbConnection, usbEndpointIN)
-                    clientData = buffer
-                }
-                usbRequests[i]?.queue(buffer, packetSize) ?: break
-            }
-
-            while (this.receiverMode == AIRSPY_RECEIVER_MODE_RECEIVE) {
-                val request =  usbConnection?.requestWait()
-                if (request == null || request.endpoint != usbEndpointIN) break
-
-                buffer = request.clientData as ByteBuffer
-                this.receivePacketCounter++
-
-                //this.queue?.offer(buffer.array()) ?: break
-                queue?.offer(buffer.array()) ?: break
-
-                buffer = ByteBuffer.wrap(this.getBufferFromBufferPool())
-                request.clientData = buffer
-                request.queue(buffer, packetSize) ?: break
-            }
-
-        } catch (e: RfSourceException) {
-            Log.e(logTag, "receiveLoop: USB Error!")
-        } finally {
-            // Clean up USB requests
-            usbRequests.forEach { it?.close() }
-        }
-    }*/
-
     override suspend fun receiveLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
         var buffer: ByteBuffer
@@ -297,7 +256,7 @@ class Airspy
                 }
 
                 // Queue the request
-                if (usbRequests[i]?.queue(buffer, packetSize) == false) {
+                if (usbRequests[i]?.queue(buffer) == false) {
                     Log.e(logTag, "receiveLoop: Couldn't queue USB Request.")
                     this.stop()
                     return
@@ -333,7 +292,7 @@ class Airspy
                 request.clientData = buffer
 
                 // Requeue the request
-                if (request.queue(buffer, packetSize) == false) {
+                if (!request.queue(buffer)) {
                     Log.e(logTag, "receiveLoop: Couldn't queue USB Request.")
                     break
                 }
@@ -448,12 +407,12 @@ class Airspy
         return true
     }
 
-    override fun setRawMode(enabled: Boolean): Boolean {
+    override fun setRawMode(rawModeEnable: Boolean): Boolean {
         if (receiverMode != AIRSPY_RECEIVER_MODE_OFF) {
             Log.e(logTag, "setRawMode: Airspy is not in receiver mode OFF. Cannot change rawMode!")
             return false
         }
-        this.rawMode = enabled
+        this.rawMode = rawModeEnable
         return true
     }
 
@@ -466,48 +425,6 @@ class Airspy
     private fun getRawMode(): Boolean {
         return rawMode
     }
-
-    /*@Throws(rfSourceException::class)
-    override fun sendUsbRequest(endpoint: Int, request: Int, value: Int, index: Int, buffer: ByteArray?): Int {
-        //var len = 0
-        // Determine the length of the buffer:
-        //if (buffer != null) len = buffer.size
-        // Determine the length of the buffer:
-        var len = buffer?.size ?: 0
-
-        try {
-// Ensure usbConnection is not null and is still active
-            if (usbConnection == null) {
-                Log.e(LOGTAG, "USB connection is null. Device may have been disconnected.")
-                throw rfSourceException("USB connection is null.")
-            }
-
-            // Claim the usb interface
-            if (!usbConnection!!.claimInterface(this.usbInterface, true)) {
-                Log.e(LOGTAG, "Couldn't claim Airspy USB Interface!")
-                throw (rfSourceException("Couldn't claim Airspy USB Interface!"))
-            }
-
-            // Send Board ID Read request
-            len = usbConnection!!.controlTransfer(
-                endpoint or UsbConstants.USB_TYPE_VENDOR,  // Request Type
-                request,  // Request
-                value,  // Value (unused)
-                index,  // Index (unused)
-                buffer,  // Buffer
-                len,  // Length
-                0 // Timeout
-            )
-        } catch (e: Exception) {
-            Log.e(LOGTAG, "Error during USB request: ${e.message}", e)
-            return -1
-            //throw rfSourceException("Error during USB request: ${e.message}")
-        } finally {
-            // Release usb interface
-            usbConnection!!.releaseInterface(this.usbInterface)
-        }
-        return len
-    }*/
 
     @Throws(RfSourceException::class)
     override fun sendUsbRequest(endpoint: Int, request: Int, value: Int, index: Int, buffer: ByteArray?): Int {

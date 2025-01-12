@@ -20,7 +20,7 @@ import com.compasseur.sdrbridge.rfsource.HackRF
 import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceCallbackInterface
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder
-import com.compasseur.sdrbridge.sources.Airspy
+import com.compasseur.sdrbridge.rfsource.Airspy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 

@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -124,25 +125,25 @@ class HackRF
         const val RF_PATH_FILTER_HIGH_PASS = 2
 
         // Some Constants:
-        private const val logTag = "hackrf_android"
+        private const val LOGTAG = "hackrf_android"
         private const val HACKRF_USB_PERMISSION = "com.compasseur.hackrf_android.USB_PERMISSION"
-        private const val numUsbRequests = 4 // Number of parallel UsbRequests
+        private const val NUM_USB_REQUEST = 4 // Number of parallel UsbRequests
         //private const val packetSize = 160000 //1024 * 16 // Buffer Size of each UsbRequest
     }
 
     init {
-        Log.i(logTag, "constructor: create com.s33me.myhackrf.Hackrf instance from ${usbDevice.deviceName}. Vendor ID: ${usbDevice.vendorId} Product ID: ${usbDevice.productId}")
-        Log.i(logTag, "constructor: device protocol: ${usbDevice.deviceProtocol}")
-        Log.i(logTag, "constructor: device class: ${usbDevice.deviceClass} subclass: ${usbDevice.deviceSubclass}")
-        Log.i(logTag, "constructor: interface count: ${usbDevice.interfaceCount}")
+        Log.i(LOGTAG, "constructor: create com.s33me.myhackrf.Hackrf instance from ${usbDevice.deviceName}. Vendor ID: ${usbDevice.vendorId} Product ID: ${usbDevice.productId}")
+        Log.i(LOGTAG, "constructor: device protocol: ${usbDevice.deviceProtocol}")
+        Log.i(LOGTAG, "constructor: device class: ${usbDevice.deviceClass} subclass: ${usbDevice.deviceSubclass}")
+        Log.i(LOGTAG, "constructor: interface count: ${usbDevice.interfaceCount}")
         try {
             // Extract interface from the device:
             this.usbInterface = usbDevice.getInterface(0)
 
             // For detailed trouble shooting: Read out interface information of the device:
-            Log.i(logTag, "constructor: [interface 0] interface protocol: ${usbInterface!!.interfaceProtocol} subclass: ${usbInterface!!.interfaceSubclass}")
-            Log.i(logTag, "constructor: [interface 0] interface class: ${usbInterface!!.interfaceClass}")
-            Log.i(logTag, "constructor: [interface 0] endpoint count: ${usbInterface!!.endpointCount}")
+            Log.i(LOGTAG, "constructor: [interface 0] interface protocol: ${usbInterface!!.interfaceProtocol} subclass: ${usbInterface!!.interfaceSubclass}")
+            Log.i(LOGTAG, "constructor: [interface 0] interface class: ${usbInterface!!.interfaceClass}")
+            Log.i(LOGTAG, "constructor: [interface 0] endpoint count: ${usbInterface!!.endpointCount}")
 
             // Extract the endpoints from the device:
             this.usbEndpointIN = usbInterface!!.getEndpoint(0)
@@ -150,21 +151,21 @@ class HackRF
 
             // For detailed trouble shooting: Read out endpoint information of the interface:
             Log.i(
-                logTag,
+                LOGTAG,
                 "constructor:     [endpoint 0 (IN)] address: ${usbEndpointIN!!.address} attributes: ${usbEndpointIN!!.attributes} direction: ${usbEndpointIN!!.direction} max_packet_size: ${usbEndpointIN!!.maxPacketSize}")
             Log.i(
-                logTag,
+                LOGTAG,
                 "constructor:     [endpoint 1 (OUT)] address: ${usbEndpointOUT!!.address} attributes: ${usbEndpointOUT!!.attributes} direction: ${usbEndpointOUT!!.direction} max_packet_size: ${usbEndpointOUT!!.maxPacketSize}")
 
             // Open the device:
             this.usbConnection = usbManager.openDevice(usbDevice)
 
             if (this.usbConnection == null) {
-                Log.e(logTag, "constructor: Couldn't open HackRF USB Device: openDevice() returned null!")
+                Log.e(LOGTAG, "constructor: Couldn't open HackRF USB Device: openDevice() returned null!")
                 throw RfSourceException("Couldn't open HackRF USB Device! (device is gone)")
             }
         } catch (e: Exception) {
-            Log.e(logTag, "constructor: Couldn't open HackRF USB Device: ${e.message}")
+            Log.e(LOGTAG, "constructor: Couldn't open HackRF USB Device: ${e.message}")
             throw RfSourceException("Error: Couldn't open HackRF USB Device!")
         }
         this.queue = ArrayBlockingQueue<ByteArray>(queueSize / getPacketSize())
@@ -179,7 +180,7 @@ class HackRF
             callbackInterface.onRfSourceReady(hackrf)
              true
         } catch (e: Exception) {
-            Log.i(logTag, "$e")
+            Log.i(LOGTAG, "$e")
              false
         }
     }
@@ -195,7 +196,7 @@ class HackRF
         // Claim the USB interface
         try {
         if (!connection.claimInterface(usbInterface, true)) {
-            Log.e(logTag, "Couldn't claim HackRF USB Interface!")
+            Log.e(LOGTAG, "Couldn't claim HackRF USB Interface!")
             return -1
             //throw rfSourceException("Couldn't claim HackRF USB Interface!")
         }
@@ -223,7 +224,7 @@ class HackRF
     @Throws(RfSourceException::class)
      fun setTransceiverMode(mode: Int): Boolean {
         if (mode < 0 || mode > 2) {
-            Log.e(logTag, "Invalid Transceiver Mode: $mode")
+            Log.e(LOGTAG, "Invalid Transceiver Mode: $mode")
             return false
         }
 
@@ -233,7 +234,7 @@ class HackRF
                 UsbConstants.USB_DIR_OUT, HACKRF_VENDOR_REQUEST_SET_TRANSCEIVER_MODE,
                 mode, 0, null) != 0
         ) {
-            Log.e(logTag, "setTransceiverMode: USB Transfer failed!")
+            Log.e(LOGTAG, "setTransceiverMode: USB Transfer failed!")
             return false
             //throw rfSourceException("USB Transfer failed!")
         }
@@ -293,12 +294,12 @@ class HackRF
     }
 
     override suspend fun receiveLoop() {
-        val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
+        val usbRequests = arrayOfNulls<UsbRequest>(NUM_USB_REQUEST)
         var buffer: ByteBuffer
 
         try {
             // Initialize and queue all USB requests
-            for (i in 0 until numUsbRequests) {
+            for (i in 0 until NUM_USB_REQUEST) {
                 // Get a ByteBuffer from the buffer pool
                 buffer = ByteBuffer.wrap(this.getBufferFromBufferPool())
 
@@ -309,8 +310,9 @@ class HackRF
                 }
 
                 // Queue the request
-                if (usbRequests[i]?.queue(buffer, getPacketSize()) == false) {
-                    Log.e(logTag, "receiveLoop: Couldn't queue USB Request.")
+                //if (usbRequests[i]?.queue(buffer, getPacketSize()) == false) {
+                if (usbRequests[i]?.queue(buffer) == false) {
+                    Log.e(LOGTAG, "receiveLoop: Couldn't queue USB Request.")
                     this.stop()
                     return
                 }
@@ -321,7 +323,7 @@ class HackRF
                 // Wait for a request to return (this blocks until one of the requests is ready)
                 val request = usbConnection?.requestWait()
                 if (request == null) {
-                    Log.e(logTag, "receiveLoop: Didn't receive USB Request.")
+                    Log.e(LOGTAG, "receiveLoop: Didn't receive USB Request.")
                     break
                 }
 
@@ -336,7 +338,7 @@ class HackRF
 
                 // Put the received samples into the queue
                 if (!queue?.offer(buffer.array())!!) {
-                    Log.e(logTag, "receiveLoop: Queue is full. Stopping receive!")
+                    Log.e(LOGTAG, "receiveLoop: Queue is full. Stopping receive!")
                     break
                 }
 
@@ -345,13 +347,14 @@ class HackRF
                 request.clientData = buffer
 
                 // Requeue the request with the fresh buffer
-                if (request.queue(buffer, packetSize) == false) {
-                    Log.e(logTag, "receiveLoop: Couldn't queue USB Request.")
+                //if (request.queue(buffer, packetSize) == false) {
+                if (!request.queue(buffer)) {
+                    Log.e(LOGTAG, "receiveLoop: Couldn't queue USB Request.")
                     break
                 }
             }
         } catch (e: RfSourceException) {
-            Log.e(logTag, "receiveLoop: USB Error!")
+            Log.e(LOGTAG, "receiveLoop: USB Error!")
         } finally {
             // Clean up USB requests
             usbRequests.forEach { it?.cancel() }
@@ -361,7 +364,7 @@ class HackRF
                 try {
                     this.stop()
                 } catch (e: RfSourceException) {
-                    Log.e(logTag, "receiveLoop: Error while stopping RX!")
+                    Log.e(LOGTAG, "receiveLoop: Error while stopping RX!")
                 }
             }
         }
@@ -369,17 +372,19 @@ class HackRF
 
     //Not implemented
     override suspend fun transmitLoop() {
-        val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
+        val usbRequests = arrayOfNulls<UsbRequest>(NUM_USB_REQUEST)
         var buffer: ByteBuffer
         var packet: ByteArray?
 
         try {
             // Create, initialize, and queue all USB requests:
-            for (i in 0 until numUsbRequests) {
+            for (i in 0 until NUM_USB_REQUEST) {
                 // Get a packet from the queue:
-                packet = queue?.poll(1000, TimeUnit.MILLISECONDS)
+                packet = withContext(Dispatchers.IO){
+                    queue?.poll(1000, TimeUnit.MILLISECONDS)
+                }
                 if (packet == null || packet.size != getPacketSize()) {
-                    Log.e(logTag, "transmitLoop: Queue empty or wrong packet format. Abort.")
+                    Log.e(LOGTAG, "transmitLoop: Queue empty or wrong packet format. Abort.")
                     this.stop()
                     break
                 }
@@ -394,8 +399,8 @@ class HackRF
                 }
 
                 // Queue the request
-                if (!usbRequests[i]!!.queue(buffer, getPacketSize())) {
-                    Log.e(logTag, "transmitLoop: Couldn't queue USB Request.")
+                if (!usbRequests[i]!!.queue(buffer)) {
+                    Log.e(LOGTAG, "transmitLoop: Couldn't queue USB Request.")
                     this.stop()
                     break
                 }
@@ -407,7 +412,7 @@ class HackRF
                 val request = usbConnection?.requestWait()
 
                 if (request == null) {
-                    Log.e(logTag, "transmitLoop: Didn't receive USB Request.")
+                    Log.e(LOGTAG, "transmitLoop: Didn't receive USB Request.")
                     break
                 }
 
@@ -422,9 +427,11 @@ class HackRF
                 this.returnBufferToBufferPool(buffer.array())
 
                 // Get the next packet from the queue:
-                packet = queue?.poll(1000, TimeUnit.MILLISECONDS)
+                packet = withContext(Dispatchers.IO){
+                    queue?.poll(1000, TimeUnit.MILLISECONDS)
+                }
                 if (packet == null || packet.size != getPacketSize()) {
-                    Log.e(logTag, "transmitLoop: Queue empty or wrong packet format. Stop transmitting.")
+                    Log.e(LOGTAG, "transmitLoop: Queue empty or wrong packet format. Stop transmitting.")
                     break
                 }
 
@@ -433,15 +440,15 @@ class HackRF
                 request.clientData = buffer
 
                 // Queue the request again...
-                if (!request.queue(buffer, getPacketSize())) {
-                    Log.e(logTag, "transmitLoop: Couldn't queue USB Request.")
+                if (!request.queue(buffer)) {
+                    Log.e(LOGTAG, "transmitLoop: Couldn't queue USB Request.")
                     break
                 }
             }
         } catch (e: RfSourceException) {
-            Log.e(logTag, "transmitLoop: USB Error!")
+            Log.e(LOGTAG, "transmitLoop: USB Error!")
         } catch (e: InterruptedException) {
-            Log.e(logTag, "transmitLoop: Interrupted while waiting on queue!")
+            Log.e(LOGTAG, "transmitLoop: Interrupted while waiting on queue!")
         }
 
         // Transmitting is done. Cancel and close all USB requests:
@@ -455,7 +462,7 @@ class HackRF
             try {
                 this.stop()
             } catch (e: RfSourceException) {
-                Log.e(logTag, "transmitLoop: Error while stopping TX!")
+                Log.e(LOGTAG, "transmitLoop: Error while stopping TX!")
             }
         }
     }
@@ -481,7 +488,7 @@ class HackRF
             // Throw it into the pool (don't care if it's working or not):
             bufferPool?.offer(buffer)
         } else {
-            Log.w(logTag, "returnBuffer: Got a buffer with wrong size. Ignore it!")
+            Log.w(LOGTAG, "returnBuffer: Got a buffer with wrong size. Ignore it!")
         }
     }
 
@@ -501,13 +508,13 @@ class HackRF
                     byteOut.toByteArray()
                 ) != 8
             ) {
-                Log.e(logTag, "setSampleRate: USB Transfer failed!")
+                Log.e(LOGTAG, "setSampleRate: USB Transfer failed!")
                 throw RfSourceException("USB Transfer failed!")
             }
 
             true
         } catch (e: IOException) {
-            Log.e(logTag, "setSampleRate: Error while converting arguments to byte buffer.")
+            Log.e(LOGTAG, "setSampleRate: Error while converting arguments to byte buffer.")
             false
         }
     }
@@ -521,7 +528,7 @@ class HackRF
             byteOut.write(intToByteArray(mhz))
             byteOut.write(intToByteArray(hz))
         } catch (e: IOException) {
-            Log.e(logTag, "setFrequency: Error while converting arguments to byte buffer.")
+            Log.e(LOGTAG, "setFrequency: Error while converting arguments to byte buffer.")
             return false
         }
 
@@ -533,7 +540,7 @@ class HackRF
                 byteOut.toByteArray()
             ) != 8
         ) {
-            Log.e(logTag, "setFrequency: USB Transfer failed!")
+            Log.e(LOGTAG, "setFrequency: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
 
@@ -567,7 +574,7 @@ class HackRF
                 null
             ) != 0
         ) {
-            Log.e(logTag, "setBasebandFilterBandwidth: USB Transfer failed!")
+            Log.e(LOGTAG, "setBasebandFilterBandwidth: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
 
@@ -579,7 +586,7 @@ class HackRF
         val retVal = ByteArray(1)
 
         if (gain > 62) {
-            Log.e(logTag, "setRxVGAGain: RX VGA Gain must be within 0-62!")
+            Log.e(LOGTAG, "setRxVGAGain: RX VGA Gain must be within 0-62!")
             return false
         }
 
@@ -594,12 +601,12 @@ class HackRF
                 retVal
             ) != 1
         ) {
-            Log.e(logTag, "setRxVGAGain: USB Transfer failed!")
+            Log.e(LOGTAG, "setRxVGAGain: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
 
         if (retVal[0] == 0.toByte()) {
-            Log.e(logTag, "setRxVGAGain: HackRF returned with an error!")
+            Log.e(LOGTAG, "setRxVGAGain: HackRF returned with an error!")
             return false
         }
 
@@ -612,7 +619,7 @@ class HackRF
         val retVal = ByteArray(1)
 
         if (gain > 47) {
-            Log.e(logTag, "setTxVGAGain: TX VGA Gain must be within 0-47!")
+            Log.e(LOGTAG, "setTxVGAGain: TX VGA Gain must be within 0-47!")
             return false
         }
 
@@ -624,12 +631,12 @@ class HackRF
                 retVal
             ) != 1
         ) {
-            Log.e(logTag, "setTxVGAGain: USB Transfer failed!")
+            Log.e(LOGTAG, "setTxVGAGain: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
 
         if (retVal[0] == 0.toByte()) {
-            Log.e(logTag, "setTxVGAGain: HackRF returned with an error!")
+            Log.e(LOGTAG, "setTxVGAGain: HackRF returned with an error!")
             return false
         }
 
@@ -641,7 +648,7 @@ class HackRF
         val retVal = ByteArray(1)
 
         if (gain > 40) {
-            Log.e(logTag, "setRxLNAGain: RX LNA Gain must be within 0-40!")
+            Log.e(LOGTAG, "setRxLNAGain: RX LNA Gain must be within 0-40!")
             return false
         }
 
@@ -659,12 +666,12 @@ class HackRF
                 retVal
             ) != 1
         ) {
-            Log.e(logTag, "setRxLNAGain: USB Transfer failed!")
+            Log.e(LOGTAG, "setRxLNAGain: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
 
         if (retVal[0] == 0.toByte()) {
-            Log.e(logTag, "setRxLNAGain: HackRF returned with an error!")
+            Log.e(LOGTAG, "setRxLNAGain: HackRF returned with an error!")
             return false
         }
 
@@ -677,25 +684,25 @@ class HackRF
 
         // Check range of IF Frequency:
         if (ifFrequency < 2_150_000_000L || ifFrequency > 2_750_000_000L) {
-            Log.e(logTag, "setFrequencyExplicit: IF Frequency must be in [2150000000; 2750000000]!")
+            Log.e(LOGTAG, "setFrequencyExplicit: IF Frequency must be in [2150000000; 2750000000]!")
             return false
         }
         if (rfPath != RF_PATH_FILTER_BYPASS && (loFrequency < 84_375_000L || loFrequency > 5_400_000_000L)) {
-            Log.e(logTag, "setFrequencyExplicit: LO Frequency must be in [84375000; 5400000000]!")
+            Log.e(LOGTAG, "setFrequencyExplicit: LO Frequency must be in [84375000; 5400000000]!")
             return false
         }
         // Check if path is in the valid range:
         if (rfPath < 0 || rfPath > 2) {
-            Log.e(logTag, "setFrequencyExplicit: Invalid value for rf_path!")
+            Log.e(LOGTAG, "setFrequencyExplicit: Invalid value for rf_path!")
             return false
         }
-        Log.d(logTag, "Tune HackRF to IF: $ifFrequency Hz; LO: $loFrequency Hz...")
+        Log.d(LOGTAG, "Tune HackRF to IF: $ifFrequency Hz; LO: $loFrequency Hz...")
         try {
             byteOut.write(longToByteArray(ifFrequency))
             byteOut.write(longToByteArray(loFrequency))
             byteOut.write(rfPath)
         } catch (e: IOException) {
-            Log.e(logTag, "setFrequencyExplicit: Error while converting arguments to byte buffer.")
+            Log.e(LOGTAG, "setFrequencyExplicit: Error while converting arguments to byte buffer.")
             return false
         }
         if (sendUsbRequest(
@@ -706,7 +713,7 @@ class HackRF
                 byteOut.toByteArray()
             ) != 17
         ) {
-            Log.e(logTag, "setFrequencyExplicit: USB Transfer failed!")
+            Log.e(LOGTAG, "setFrequencyExplicit: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
         return true
@@ -722,7 +729,7 @@ class HackRF
                 null
             ) != 0
         ) {
-            Log.e(logTag, "setAmp: USB Transfer failed!")
+            Log.e(LOGTAG, "setAmp: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
 
@@ -733,12 +740,12 @@ class HackRF
     override fun setAntennaPower(enable: Boolean): Boolean {
         // The Jawbreaker doesn't support this command!
         if (getBoardID().toInt() == 1) { // == Jawbreaker
-            Log.w(logTag, "setAntennaPower: Antenna Power is not supported for HackRF Jawbreaker. Ignore.")
+            Log.w(LOGTAG, "setAntennaPower: Antenna Power is not supported for HackRF Jawbreaker. Ignore.")
             return false
         }
         // The rad1o doesn't support this command!
         if (getBoardID().toInt() == 3) { // == rad1o
-            Log.w(logTag, "setAntennaPower: Antenna Power is not supported for rad1o. Ignore.")
+            Log.w(LOGTAG, "setAntennaPower: Antenna Power is not supported for rad1o. Ignore.")
             return false
         }
         if (sendUsbRequest(
@@ -749,7 +756,7 @@ class HackRF
                 null
             ) != 0
         ) {
-            Log.e(logTag, "setAntennaPower: USB Transfer failed!")
+            Log.e(LOGTAG, "setAntennaPower: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
 
@@ -760,7 +767,7 @@ class HackRF
      fun getBoardID(): Byte {
         val buffer = ByteArray(1)
         if (sendUsbRequest(UsbConstants.USB_DIR_IN, HACKRF_VENDOR_REQUEST_BOARD_ID_READ, 0, 0, buffer) != 1) {
-            Log.e(logTag, "getBoardID: USB Transfer failed!")
+            Log.e(LOGTAG, "getBoardID: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
         return buffer[0]
@@ -781,7 +788,7 @@ class HackRF
         val buffer = ByteArray(255)
         val len = this.sendUsbRequest(UsbConstants.USB_DIR_IN, HACKRF_VENDOR_REQUEST_VERSION_STRING_READ, 0, 0, buffer)
         if (len < 1) {
-            Log.e(logTag, "getVersionString: USB Transfer failed!")
+            Log.e(LOGTAG, "getVersionString: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
         return String(buffer)
@@ -792,7 +799,7 @@ class HackRF
         val buffer = ByteArray(8 + 16)
         val ret = IntArray(2 + 4)
         if (this.sendUsbRequest(UsbConstants.USB_DIR_IN, HACKRF_VENDOR_REQUEST_BOARD_PARTID_SERIALNO_READ, 0, 0, buffer) != 8 + 16) {
-            Log.e(logTag, "getPartIdAndSerialNo: USB Transfer failed!")
+            Log.e(LOGTAG, "getPartIdAndSerialNo: USB Transfer failed!")
             throw RfSourceException("USB Transfer failed!")
         }
         for (i in 0 until 6) {
@@ -801,11 +808,11 @@ class HackRF
         return ret
     }
 
-     fun getTransceiverPacketCounter(): Long {
+     private fun getTransceiverPacketCounter(): Long {
         return transceivePacketCounter
     }
 
-     fun getTransceivingTime(): Long {
+     private fun getTransceivingTime(): Long {
         return if (transceiveStartTime == 0L) 0 else System.currentTimeMillis() - transceiveStartTime
     }
 

@@ -14,7 +14,7 @@ import android.os.IBinder
 import com.compasseur.sdrbridge.rfsource.HackRF
 import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder
-import com.compasseur.sdrbridge.sources.Airspy
+import com.compasseur.sdrbridge.rfsource.Airspy
 import kotlinx.coroutines.*
 import java.io.InputStream
 import java.io.OutputStream
