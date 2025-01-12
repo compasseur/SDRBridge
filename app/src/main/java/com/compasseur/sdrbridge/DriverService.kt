@@ -11,7 +11,6 @@ import android.graphics.Color
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.IBinder
-import android.util.Log
 import com.compasseur.sdrbridge.rfsource.HackRF
 import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder

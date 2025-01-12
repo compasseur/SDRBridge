@@ -13,9 +13,7 @@ import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -379,7 +377,7 @@ class HackRF
             // Create, initialize, and queue all USB requests:
             for (i in 0 until numUsbRequests) {
                 // Get a packet from the queue:
-                packet = queue?.poll(1000, TimeUnit.MILLISECONDS) as ByteArray?
+                packet = queue?.poll(1000, TimeUnit.MILLISECONDS)
                 if (packet == null || packet.size != getPacketSize()) {
                     Log.e(logTag, "transmitLoop: Queue empty or wrong packet format. Abort.")
                     this.stop()
@@ -424,7 +422,7 @@ class HackRF
                 this.returnBufferToBufferPool(buffer.array())
 
                 // Get the next packet from the queue:
-                packet = queue?.poll(1000, TimeUnit.MILLISECONDS) as ByteArray?
+                packet = queue?.poll(1000, TimeUnit.MILLISECONDS)
                 if (packet == null || packet.size != getPacketSize()) {
                     Log.e(logTag, "transmitLoop: Queue empty or wrong packet format. Stop transmitting.")
                     break

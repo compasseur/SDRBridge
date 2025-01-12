@@ -18,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
-import java.util.Arrays
 import java.util.concurrent.ArrayBlockingQueue
 /**
  * <h1>Airspy USB Library for Android</h1>
