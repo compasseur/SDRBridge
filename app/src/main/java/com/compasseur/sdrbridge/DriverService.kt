@@ -60,11 +60,11 @@ class DriverService : Service() {
     private var rfSource: RfSource? = null
 
     private var serverSocket: ServerSocket? = null
-    private var address: String? = "127.0.0.1" //localhost -a
-    private var serverPort = 1234 //5000 // -p
+    private var address: String? = "127.0.0.1" // -a
+    private var serverPort = 1234 // -p
 
-    private var frequency = 100000000L //-f
-    private var samplerate = 20000000 //-s
+    private var frequency = 100000000L // -f
+    private var samplerate = 20000000 // -s
     private var basebandFilterBandwidth = 1000000 // -b
 
     private var rxVgaGain = 16 // -v
@@ -78,7 +78,7 @@ class DriverService : Service() {
     private var packingEnable = false
     //private var transceiverMode = 1 // -o
 
-    private var packetSize = 16384
+    private var packetSize = 16384 // -ps
 
     private var commandJob: Job? = null
     private var sampleJob: Job? = null

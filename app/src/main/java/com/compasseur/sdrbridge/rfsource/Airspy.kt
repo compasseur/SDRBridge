@@ -103,7 +103,7 @@ class Airspy
     //private val logTag = "airspy_android"
     private val logTag: String = "airspy_android"
 
-    private var packetSize = 1024 * 16 //96000 192000 // Buffer Size of each UsbRequest
+    private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest
 
     companion object {
         // Sample types:

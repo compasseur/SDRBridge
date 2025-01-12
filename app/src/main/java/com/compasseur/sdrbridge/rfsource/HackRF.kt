@@ -88,7 +88,7 @@ class HackRF
     private var receiveJob: Job? = null
     private var transmitJob: Job? = null
 
-    private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest 160000 128000
+    private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest
 
     // Transceiver Modes:
     companion object {
@@ -263,6 +263,7 @@ class HackRF
         return this.queue!!
     }
 
+    //Not implemented
     @Throws(RfSourceException::class)
     override fun startTX(): ArrayBlockingQueue<ByteArray> {
         // Flush the queue
@@ -368,7 +369,7 @@ class HackRF
         }
     }
 
-
+    //Not implemented
     override suspend fun transmitLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
         var buffer: ByteBuffer
@@ -515,11 +516,9 @@ class HackRF
 
     @Throws(RfSourceException::class)
     override fun setFrequency(frequency: Long): Boolean {
-        //LogParameters.appendLine("$logTag, HACKRF setfrequency : $frequency")
         val byteOut = ByteArrayOutputStream()
         val mhz = (frequency / 1_000_000L).toInt()
         val hz = (frequency % 1_000_000L).toInt()
-        //Log.d(logTag, "Tune HackRF to $mhz.$hz MHz...")
         try {
             byteOut.write(intToByteArray(mhz))
             byteOut.write(intToByteArray(hz))
@@ -609,6 +608,7 @@ class HackRF
         return true
     }
 
+    //Not implemented
     @Throws(RfSourceException::class)
     override fun setTxVGAGain(gain: Int): Boolean {
         val retVal = ByteArray(1)
