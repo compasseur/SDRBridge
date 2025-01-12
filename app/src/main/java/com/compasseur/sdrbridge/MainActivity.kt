@@ -21,10 +21,8 @@ import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceCallbackInterface
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder
 import com.compasseur.sdrbridge.sources.Airspy
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Module:      MainActivity
@@ -58,7 +56,6 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     private lateinit var usbManager: UsbManager
     private var intentParameters: Uri? = null
     private var rfSource: RfSource? = null
-    private var logChangedListener: (() -> Unit)? = null
     private var logChangedJob: Job? = null
     private var fromResultHandler = false
 
