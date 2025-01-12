@@ -1,5 +1,6 @@
 package com.compasseur.sdrbridge
 
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.hardware.usb.UsbManager
@@ -9,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.View
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -27,7 +29,7 @@ import kotlinx.coroutines.withContext
 /**
  * Module:      MainActivity
  * Description: Receives intent from IntentHandlerActivity,
- *              checks for USB permission and get the RfSource,
+ *              launches USB permission manager, gets the RfSource,
  *              starts the DriverService and displays the Log on the XML.
  *
  * Copyright (C) 2024 Grégoire de Courtivron
@@ -97,24 +99,31 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             LogParameters.appendLine("$logTag: Intent received data = $intentParameters")
             usbPermissionChecker()
             Handler(Looper.getMainLooper()).post {
+                // Move task to the background to keep the client app in the foreground
                 moveTaskToBack(true)
             }
         }
 
-        binding.btnClearLog.setOnClickListener {
-            LogParameters.clearLog()
+        binding.apply {
+            btnClearLog.setOnClickListener {
+                LogParameters.clearLog()
+            }
+
+            btnAbout.setOnClickListener {
+                showAbout()
+            }
         }
     }
 
     private fun usbPermissionChecker() {
         usbPermissionManager.findRfSourceDevice()?.let { device ->
-            LogParameters.appendLine("$logTag:  /// ${RfSourceHolder.rfSource}")
+            //LogParameters.appendLine("$logTag:  /// ${RfSourceHolder.rfSource}")
+            LogParameters.appendLine("$logTag:  /// ${device.productName}")
             usbPermissionManager.checkUsbPermission(device)
         }
     }
 
     private fun startDriverService() {
-        LogParameters.appendLine("$logTag: startDriverService.")
         val serviceIntent = Intent(this, DriverService::class.java).apply {
             data = intentParameters
         }
@@ -132,7 +141,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     override fun onRfSourceReady(sourcerf: RfSource) {
         RfSourceHolder.rfSource = sourcerf
         if (fromResultHandler) {
-            LogParameters.appendLine("$logTag: Source is ready !!!\nStarting driver service")
+            LogParameters.appendLine("$logTag: Source is ready !!! Starting driver service")
             startDriverService()
         }
     }
@@ -145,14 +154,94 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     private fun observeLogParametersChanges() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) { // Runs when the lifecycle is at least STARTED
-                LogParameters.logFlow.collect { log ->
-                    binding.apply {
-                        logData.text = log
-                        scrollview.post { scrollview.fullScroll(View.FOCUS_DOWN) }
+                try {
+                    LogParameters.logFlow.collect { log ->
+                        binding.apply {
+                            logData.text = log
+                            scrollview.post { scrollview.fullScroll(View.FOCUS_DOWN) }
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.i(logTag, "Error: $e")
                 }
             }
         }
     }
+
+
+    /*private fun showAbout() {
+        val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF")
+        AlertDialog.Builder(this).apply {
+            setTitle("About")
+            setItems(listOfChoices) { dialogInterface, i ->
+                when (i) {
+                    0 -> {
+                        try {
+                            val intentWeb = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/compasseur/SDRBridge"))
+                            startActivity(intentWeb)
+                        } catch (e: Exception) {
+                            Toast.makeText(this@MainActivity, "Could not load the browser.\nYou can go to github.com/compasseur/SDRBridge.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+
+                    1 -> {
+                        AlertDialog.Builder(this@MainActivity).apply {
+                            setTitle("Airspy license")
+                            setMessage(getString(R.string.airspy_license))
+                            setPositiveButton("OK") { _, _ -> }
+                        }.create().show()
+                    }
+
+                    else -> {
+                        AlertDialog.Builder(this@MainActivity).apply {
+                            setTitle("HackRF license")
+                            setMessage(getString(R.string.hackrf_license))
+                            setPositiveButton("OK") { _, _ -> }
+                        }.create().show()
+                    }
+                }
+                dialogInterface.dismiss()
+            }
+            setNeutralButton("Dismiss") { dialog, _ ->
+                dialog.cancel()
+            }
+        }.create().show()
+    }*/
+
+    private fun showAbout() {
+        val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "Compasseur")
+        AlertDialog.Builder(this).apply {
+            setTitle("About")
+            setItems(listOfChoices) { dialogInterface, i ->
+                when (i) {
+                    0 -> openWebPage("https://github.com/compasseur/SDRBridge")
+                    1 -> showLicenseDialog("Airspy license", getString(R.string.airspy_license))
+                    2 -> showLicenseDialog("HackRF license", getString(R.string.hackrf_license))
+                    else -> openWebPage("https://www.compasseur.com")
+                }
+                dialogInterface.dismiss()
+            }
+            setNeutralButton("Dismiss") { dialog, _ -> dialog.cancel() }
+        }.create().show()
+    }
+
+    private fun openWebPage(url: String) {
+        try {
+            val intentWeb = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            startActivity(intentWeb)
+        } catch (e: Exception) {
+            Toast.makeText(this@MainActivity, "Could not load the browser. You can visit $url.", Toast.LENGTH_LONG).show()
+            LogParameters.appendLine("$logTag: Error opening browser: ${e.message}")
+        }
+    }
+
+    private fun showLicenseDialog(title: String, message: String) {
+        AlertDialog.Builder(this@MainActivity).apply {
+            setTitle(title)
+            setMessage(message)
+            setPositiveButton("OK") { _, _ -> }
+        }.create().show()
+    }
+
 }
 

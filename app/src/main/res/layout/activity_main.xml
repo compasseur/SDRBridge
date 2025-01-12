@@ -13,6 +13,12 @@
         android:background="@color/color_2"
         >
 
+        <Button
+            android:id="@+id/btn_clear_log"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="CLEAR LOG"/>
+
         <TextView
             android:background="@color/color_2"
             android:id="@+id/textView"
@@ -26,10 +32,10 @@
             android:text="SDR bridge" />
 
         <Button
-            android:id="@+id/btn_clear_log"
+            android:id="@+id/btn_about"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="CLEAR LOG"/>
+            android:text="ABOUT"/>
 
     </LinearLayout>
 

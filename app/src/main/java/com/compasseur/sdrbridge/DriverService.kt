@@ -249,6 +249,8 @@ class DriverService : Service() {
             var byteReceivedQueue: ArrayBlockingQueue<ByteArray>? = null
             if (rfSource is HackRF) byteReceivedQueue = rfSource!!.startRX()
             rfSource!!.apply {
+                setPacketSize(packetSize)
+                LogParameters.appendLine("$logTag : packetSize set")
                 setSampleRate(samplerate, 1)
                 LogParameters.appendLine("$logTag : samplerate set")
                 setFrequency(frequency)

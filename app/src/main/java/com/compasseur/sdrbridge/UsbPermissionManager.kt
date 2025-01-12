@@ -97,7 +97,7 @@ class UsbPermissionManager(
             (it.vendorId == hackRFVendorID && it.productId == hackRFProductID)
                     || (it.vendorId == airspyMiniVendorID && it.productId == airspyMiniProductID)
         }
-        LogParameters.appendLine("$logTag: Found $foundDevice")
+        LogParameters.appendLine("$logTag: Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId}")
         return foundDevice
     }
 }
