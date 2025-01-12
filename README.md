@@ -40,4 +40,11 @@ When using an Airspy Mini, the driver can only send Raw samples at the moment.
 The driver allows to specifiy a custom packet size for receiving samples (both Airspy and HackRF).
 
 
-
+The SDRBridge driver app is based on the work by:
+-Dennis Mantz
+-Jared Boone
+-Benjamin Vernoux
+-Youssef Touil
+-Ian Gilmour
+-Michael Ossmann
+-SignalWare Ltd
