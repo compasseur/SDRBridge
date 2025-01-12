@@ -37,7 +37,7 @@ When using a HackRF One, is is not possible to use the driver for transmitting ;
 
 When using an Airspy Mini, the driver can only send Raw samples at the moment.
 
-The driver allows to specifiy a custom packet size for receiving samples (both Airspy and HackRF).
+The driver allows to specifiy a custom usb request buffer size size for receiving samples (both Airspy and HackRF) (default is 1024 * 16).
 
 
 The SDRBridge driver app is based on the work by:
