@@ -39,7 +39,7 @@ When using an Airspy Mini, the driver can only send Raw samples at the moment.
 
 The driver allows to specifiy a custom usb request buffer size size for receiving samples (both Airspy and HackRF) (default is 1024 * 16).
 
-Compatible commands (more infos in [Commands.kt](https://github.com/compasseur/SDRBridge/blob/main/app/src/main/java/com/compasseur/sdrbridge/Commands.kt):
+Compatible commands:
 - set frequency
 - set VGA gain
 - set LNA gain
@@ -50,6 +50,8 @@ Compatible commands (more infos in [Commands.kt](https://github.com/compasseur/S
 - set antenna power
 - set packet size
 - set quit driver
+
+more infos in [Commands.kt](https://github.com/compasseur/SDRBridge/blob/main/app/src/main/java/com/compasseur/sdrbridge/Commands.kt)
 
 
 
