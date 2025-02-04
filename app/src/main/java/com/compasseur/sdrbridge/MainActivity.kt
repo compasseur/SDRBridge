@@ -168,7 +168,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     }
 
     private fun showAbout() {
-        val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "Compasseur")
+        val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "Compasseur", "Privacy policy")
         AlertDialog.Builder(this).apply {
             setTitle("About")
             setItems(listOfChoices) { dialogInterface, i ->
@@ -176,6 +176,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
                     0 -> openWebPage("https://github.com/compasseur/SDRBridge")
                     1 -> showLicenseDialog("Airspy license", getString(R.string.airspy_license))
                     2 -> showLicenseDialog("HackRF license", getString(R.string.hackrf_license))
+                    3 -> openWebPage("https://www.compasseur.com/sdr-bridge-privacy-policy/")
                     else -> openWebPage("https://www.compasseur.com")
                 }
                 dialogInterface.dismiss()
