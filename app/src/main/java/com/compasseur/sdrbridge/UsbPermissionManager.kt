@@ -94,10 +94,12 @@ class UsbPermissionManager(
     fun findRfSourceDevice(): UsbDevice? {
         val deviceList = usbManager.deviceList
         val foundDevice = deviceList.values.firstOrNull {
-            (it.vendorId == hackRFVendorID && it.productId == hackRFProductID)
-                    || (it.vendorId == airspyMiniVendorID && it.productId == airspyMiniProductID)
+            (it.vendorId == hackRFVendorID && it.productId == hackRFProductID) ||
+            (it.vendorId == hackRFJawbreakerVendorID && it.productId == hackRFJawbreakerProductID) ||
+            (it.vendorId == hackRFRad1oVendorID && it.productId == hackRFRad1oProductID) ||
+            (it.vendorId == airspyMiniVendorID && it.productId == airspyMiniProductID)
         }
-        LogParameters.appendLine("$logTag: Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId}")
+        LogParameters.appendLine("$logTag: Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId} - ${foundDevice?.version}")
         return foundDevice
     }
 }

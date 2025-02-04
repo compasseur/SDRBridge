@@ -13,9 +13,13 @@ import com.compasseur.sdrbridge.LogParameters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
+import kotlin.coroutines.coroutineContext
+
 /**
  * <h1>Airspy USB Library for Android</h1>
  *
@@ -77,15 +81,11 @@ class Airspy
     private var sampleType = AIRSPY_SAMPLE_INT16_IQ //AIRSPY_SAMPLE_UINT16_REAL // Type of the samples that should be delivered
     private var packingEnabled = false // is packing currently enabled in the Airspy?
     private var rawMode = true // if true, the conversion thread is bypassed and the
-                                // user will access the usbQueue directly
+    // user will access the usbQueue directly
 
     private var queue: ArrayBlockingQueue<ByteArray>? = null // queue that buffers samples received from the Airspy
     private var bufferPool: ArrayBlockingQueue<ByteArray>? = null // queue that holds spare buffers which can be
-                                                                  // reused while receiving  samples from the Airspy
-
-    //private var conversionQueueInt16: ArrayBlockingQueue<ShortArray>? = null // queue that buffers samples that were processed by
-    //private var conversionBufferPoolInt16: ArrayBlockingQueue<ShortArray>? = null // queue that buffers samples that were processed by
-    //private val conversionQueueSize = 20
+    // reused while receiving  samples from the Airspy
 
     // startTime (in ms since 1970) and packetCounter for statistics:
     private var receiveStartTime: Long = 0
@@ -94,20 +94,16 @@ class Airspy
     private val coroutineScope = CoroutineScope(Dispatchers.IO)
     private var receiveJob: Job? = null
     private var processJob: Job? = null
-    //private var int16Converter: AirspyInt16Converter? = null
 
-    //private val logTag = "airspy_android"
-    private val logTag: String = "airspy_android"
-
-    private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest
+    private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest (can be customized through a command from client app)
 
     companion object {
         // Sample types:
-         const val AIRSPY_SAMPLE_FLOAT32_IQ: Int = 0 // 2 * 32bit float per sample
-         const val AIRSPY_SAMPLE_FLOAT32_REAL: Int = 1 // 1 * 32bit float per sample
-         const val AIRSPY_SAMPLE_INT16_IQ: Int = 2 // 2 * 16bit int per sample
-         const val AIRSPY_SAMPLE_INT16_REAL: Int = 3 // 1 * 16bit int per sample
-         const val AIRSPY_SAMPLE_UINT16_REAL: Int = 4 // 1 * 16bit unsigned int per sample (raw)
+        const val AIRSPY_SAMPLE_FLOAT32_IQ: Int = 0 // 2 * 32bit float per sample
+        const val AIRSPY_SAMPLE_FLOAT32_REAL: Int = 1 // 1 * 32bit float per sample
+        const val AIRSPY_SAMPLE_INT16_IQ: Int = 2 // 2 * 16bit int per sample
+        const val AIRSPY_SAMPLE_INT16_REAL: Int = 3 // 1 * 16bit int per sample
+        const val AIRSPY_SAMPLE_UINT16_REAL: Int = 4 // 1 * 16bit unsigned int per sample (raw)
 
         // USB Vendor Requests (from airspy_commands.h)
         private const val AIRSPY_INVALID: Int = 0
@@ -138,11 +134,8 @@ class Airspy
         private const val AIRSPY_GET_SAMPLERATES: Int = 25
         private const val AIRSPY_SET_PACKING: Int = 26
 
-        // Some Constants:
-
-        private const val numUsbRequests: Int = 4 //16 //16 // Number of parallel UsbRequests
-
-        //private val packetSize = 192000 //96000 192000 //1024 * 16 // Buffer Size of each UsbRequest
+        private const val logTag: String = "airspy_android"
+        private const val numUsbRequests: Int = 4 //16 // Number of parallel UsbRequests
     }
 
     init {
@@ -207,24 +200,6 @@ class Airspy
 
         this.queue?.clear()
 
-        /*if (!rawMode){
-            when (sampleType){
-                AIRSPY_SAMPLE_FLOAT32_IQ -> {}
-                AIRSPY_SAMPLE_FLOAT32_REAL -> {}
-                AIRSPY_SAMPLE_UINT16_REAL -> {}
-                AIRSPY_SAMPLE_INT16_REAL -> {}
-                AIRSPY_SAMPLE_INT16_IQ -> {
-                    conversionQueueInt16 = ArrayBlockingQueue<ShortArray>(conversionQueueSize)
-                    for (i in 0 until conversionQueueSize) conversionBufferPoolInt16!!.offer(ShortArray(getUsbPacketSize() / 2))
-                    int16Converter = AirspyInt16Converter(sampleType, packingEnabled, queue!!, bufferPool!!, conversionQueueInt16!!, conversionBufferPoolInt16!!)
-                    int16Converter?.start()
-                }
-            }
-        }*/
-
-
-        //setSampleType(sampleType)
-        //setRawMode(true)
         // Signal the Airspy Device to start receiving:
         setReceiverMode(AIRSPY_RECEIVER_MODE_RECEIVE)
 
@@ -242,66 +217,66 @@ class Airspy
 
     override suspend fun receiveLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
-        var buffer: ByteBuffer
+        var isRunning = true
 
         try {
-            // Create, initialize, and queue all USB requests
+            // Initialize USB requests
             for (i in 0 until numUsbRequests) {
-                buffer = ByteBuffer.wrap(this.getBufferFromBufferPool())
-
-                // Initialize the USB request
+                val buffer = ByteBuffer.wrap(getBufferFromBufferPool())
                 usbRequests[i] = UsbRequest().apply {
                     initialize(usbConnection, usbEndpointIN)
                     clientData = buffer
                 }
-
-                // Queue the request
                 if (usbRequests[i]?.queue(buffer) == false) {
-                    Log.e(logTag, "receiveLoop: Couldn't queue USB Request.")
-                    this.stop()
-                    return
+                    throw RfSourceException("Failed to queue initial USB Request")
                 }
             }
 
-            // Run loop until receiver mode changes
-            while (this.receiverMode == AIRSPY_RECEIVER_MODE_RECEIVE) {
-                // Wait for a request to return. This will block until one of the requests is ready
-                val request = usbConnection?.requestWait()
-                if (request == null) {
-                    Log.e(logTag, "receiveLoop: Didn't receive USB Request.")
-                    break
-                }
+            while (isRunning && this.receiverMode == AIRSPY_RECEIVER_MODE_RECEIVE) {
+                coroutineContext.ensureActive()  // Check if coroutine is still active
 
-                // Make sure we got a UsbRequest for the IN endpoint
-                if (request.endpoint != usbEndpointIN) {
+                val request = withTimeoutOrNull(1000) {
+                    usbConnection?.requestWait()
+                } ?: continue  // Use timeout instead of blocking indefinitely
+
+                if (request.endpoint != usbEndpointIN) continue
+
+                val buffer = request.clientData as ByteBuffer
+                this.receivePacketCounter++
+
+                // Use a timeout when offering to queue
+                val queueSuccess = withTimeoutOrNull(100) {
+                    queue?.offer(buffer.array())
+                } ?: false
+
+                if (!queueSuccess) {
+                    Log.w(logTag, "Queue is full, dropping packet")
+                    returnBufferToBufferPool(buffer.array())
                     continue
                 }
 
-                // Extract the buffer
-                buffer = request.clientData as ByteBuffer
-                this.receivePacketCounter++
-
-                // Put the received samples into the queue
-                if (!queue?.offer(buffer.array())!!) {
-                    Log.e(logTag, "receiveLoop: Queue is full. Stopping receive!")
-                    break
-                }
-
-                // Get a fresh ByteBuffer from the buffer pool
-                buffer = ByteBuffer.wrap(this.getBufferFromBufferPool())
-                request.clientData = buffer
-
-                // Requeue the request
-                if (!request.queue(buffer)) {
-                    Log.e(logTag, "receiveLoop: Couldn't queue USB Request.")
-                    break
+                // Prepare next buffer
+                val nextBuffer = ByteBuffer.wrap(getBufferFromBufferPool())
+                request.clientData = nextBuffer
+                if (!request.queue(nextBuffer)) {
+                    isRunning = false
+                    Log.e(logTag, "Failed to queue next USB Request")
                 }
             }
-        } catch (e: RfSourceException) {
-            Log.e(logTag, "receiveLoop: USB Error!")
+        } catch (e: Exception) {
+            Log.e(logTag, "receiveLoop error: ${e.message}")
         } finally {
-            // Clean up USB requests
-            usbRequests.forEach { it?.cancel() }
+            // Cleanup
+            usbRequests.forEach { request ->
+                try {
+                    request?.cancel()
+                    (request?.clientData as? ByteBuffer)?.let {
+                        returnBufferToBufferPool(it.array())
+                    }
+                } catch (e: Exception) {
+                    Log.e(logTag, "Error cleaning up USB request: ${e.message}")
+                }
+            }
 
             // If the receiver mode is still on RECEIVE, stop receiving
             if (this.receiverMode == AIRSPY_RECEIVER_MODE_RECEIVE) {
@@ -314,7 +289,6 @@ class Airspy
         }
     }
 
-
     private fun getBufferFromBufferPool(): ByteArray {
         var buffer: ByteArray? = bufferPool?.poll()
 
@@ -325,13 +299,48 @@ class Airspy
         return buffer
     }
 
+    private fun returnBufferToBufferPool(buffer: ByteArray) {
+        if (buffer.size == packetSize) {
+            // Throw it into the pool (don't care if it's working or not):
+            bufferPool?.offer(buffer)
+        } else {
+            Log.w(logTag, "returnBuffer: Got a buffer with wrong size. Ignore it!")
+        }
+    }
+
     @Throws(RfSourceException::class)
     override fun stop() {
-        // Signal the HackRF Device to turn off the transceiver
-        this.setReceiverMode(AIRSPY_RECEIVER_MODE_OFF)
         receiveJob?.cancel()
-        receiveJob = null
         processJob?.cancel()
+
+        // Set mode first to ensure device stops streaming
+        try {
+            receiverMode = AIRSPY_RECEIVER_MODE_OFF
+        } catch (e: Exception) {
+            Log.e(logTag, "Error setting transceiver mode off: ${e.message}")
+        }
+
+        // Clear queues
+        queue?.clear()
+        bufferPool?.clear()
+
+        // Release USB resources
+        try {
+            usbConnection?.releaseInterface(usbInterface)
+            usbConnection?.close()
+        } catch (e: Exception) {
+            Log.e(logTag, "Error releasing USB interface: ${e.message}")
+        }
+
+        // Reset variables
+        usbInterface = null
+        usbConnection = null
+        usbEndpointIN = null
+        usbEndpointOUT = null
+        queue = null
+        bufferPool = null
+
+        receiveJob = null
         processJob = null
     }
 
@@ -428,38 +437,25 @@ class Airspy
 
     @Throws(RfSourceException::class)
     override fun sendUsbRequest(endpoint: Int, request: Int, value: Int, index: Int, buffer: ByteArray?): Int {
-        // Determine the length of the buffer
         val len = buffer?.size ?: 0
-
-        // Check for usbConnection nullity
         val connection = usbConnection ?: throw RfSourceException("USB connection is null!")
 
+        // Don't claim/release for every request - do it once during initialization
         try {
-            // Claim the USB interface
-            if (!connection.claimInterface(usbInterface, true)) {
-                Log.e(logTag, "Couldn't claim HackRF USB Interface!")
-                return -1
-                //throw rfSourceException("Couldn't claim HackRF USB Interface!")
-            }
-        }catch (e: Exception){
-            return -1
-        }
-
             // Send request
-            val transferredLength = connection.controlTransfer(
-                endpoint or UsbConstants.USB_TYPE_VENDOR,  // Request Type
-                request,                                    // Request
-                value,                                      // Value (unused)
-                index,                                      // Index (unused)
-                buffer,                                     // Buffer
-                len,                                        // Length
-                0                                           // Timeout
+            return connection.controlTransfer(
+                endpoint or UsbConstants.USB_TYPE_VENDOR,
+                request,
+                value,
+                index,
+                buffer,
+                len,
+                1000  // Add a reasonable timeout
             )
-
-            // Release USB interface
-            connection.releaseInterface(usbInterface)
-
-        return transferredLength
+        } catch (e: Exception) {
+            Log.e(logTag, "USB transfer failed: ${e.message}")
+            throw RfSourceException("USB Transfer failed: ${e.message}")
+        }
     }
 
     @Throws(RfSourceException::class)
@@ -705,7 +701,6 @@ class Airspy
             Log.e(logTag, "setFrequency: USB Transfer failed!")
             throw (RfSourceException("USB Transfer failed!"))
         }
-        //this.queue?.clear()
         return true
     }
 
@@ -725,17 +720,10 @@ class Airspy
         ) {
             Log.e(logTag, "setReceiverMode: USB Transfer failed!")
             return false
-            //throw (rfSourceException("USB Transfer failed!"))
         }
 
         return true
     }
-
-    /*fun getInt16Queue(): ArrayBlockingQueue<ShortArray>? {
-        if (receiverMode != AIRSPY_RECEIVER_MODE_RECEIVE) return null
-        return if (sampleType == AIRSPY_SAMPLE_INT16_IQ || sampleType == AIRSPY_SAMPLE_INT16_REAL || sampleType == AIRSPY_SAMPLE_UINT16_REAL) conversionQueueInt16
-        else null
-    }*/
 
     private fun getRawQueue(): ArrayBlockingQueue<ByteArray>? {
         if (receiverMode != AIRSPY_RECEIVER_MODE_RECEIVE) return null

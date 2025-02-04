@@ -13,13 +13,16 @@ import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 
 /**
  * <h1>HackRF USB Library for Android</h1>
@@ -67,15 +70,12 @@ class HackRF
 
 @Throws(RfSourceException::class) constructor(usbManager: UsbManager, usbDevice: UsbDevice, queueSize: Int) : RfSource {
     // Attributes to hold the USB related objects:
-    //private var usbManager: UsbManager? = usbManager
-    //private var usbDevice: UsbDevice? = usbDevice
     private var usbInterface: UsbInterface? = null
     private var usbConnection: UsbDeviceConnection? = null
     private var usbEndpointIN: UsbEndpoint? = null
     private var usbEndpointOUT: UsbEndpoint? = null
 
     private var transceiverMode: Int = HACKRF_TRANSCEIVER_MODE_OFF // current mode of the HackRF
-    //private var usbThread: Thread? = null  // hold the transceiver Thread if running
     private var queue: ArrayBlockingQueue<ByteArray>? = null  // queue that buffers samples to pass them
     private var bufferPool: ArrayBlockingQueue<ByteArray>? = null  // queue that holds old buffers which can be reused while receiving or transmitting samples
 
@@ -87,7 +87,7 @@ class HackRF
     private var receiveJob: Job? = null
     private var transmitJob: Job? = null
 
-    private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest
+    private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest (can be customized through a command from client app)
 
     // Transceiver Modes:
     companion object {
@@ -124,11 +124,8 @@ class HackRF
         const val RF_PATH_FILTER_LOW_PASS = 1
         const val RF_PATH_FILTER_HIGH_PASS = 2
 
-        // Some Constants:
         private const val LOGTAG = "hackrf_android"
-        private const val HACKRF_USB_PERMISSION = "com.compasseur.hackrf_android.USB_PERMISSION"
         private const val NUM_USB_REQUEST = 4 // Number of parallel UsbRequests
-        //private const val packetSize = 160000 //1024 * 16 // Buffer Size of each UsbRequest
     }
 
     init {
@@ -178,51 +175,37 @@ class HackRF
             val hackrf = HackRF(usbManager, device, queueSize)
             Toast.makeText(context, "HackRF at " + device.deviceName + " is ready!", Toast.LENGTH_LONG).show()
             callbackInterface.onRfSourceReady(hackrf)
-             true
+            true
         } catch (e: Exception) {
             Log.i(LOGTAG, "$e")
-             false
+            false
         }
     }
 
     @Throws(RfSourceException::class)
     override fun sendUsbRequest(endpoint: Int, request: Int, value: Int, index: Int, buffer: ByteArray?): Int {
-        // Determine the length of the buffer
         val len = buffer?.size ?: 0
-
-        // Check for usbConnection nullity
         val connection = usbConnection ?: throw RfSourceException("USB connection is null!")
 
-        // Claim the USB interface
         try {
-        if (!connection.claimInterface(usbInterface, true)) {
-            Log.e(LOGTAG, "Couldn't claim HackRF USB Interface!")
-            return -1
-            //throw rfSourceException("Couldn't claim HackRF USB Interface!")
+            // Send request
+            return connection.controlTransfer(
+                endpoint or UsbConstants.USB_TYPE_VENDOR,
+                request,
+                value,
+                index,
+                buffer,
+                len,
+                1000  // Add a reasonable timeout
+            )
+        } catch (e: Exception) {
+            Log.e(LOGTAG, "USB transfer failed: ${e.message}")
+            throw RfSourceException("USB Transfer failed: ${e.message}")
         }
-        }catch (e: Exception){
-            return -1
-        }
-
-        // Send request
-        val transferredLength = connection.controlTransfer(
-            endpoint or UsbConstants.USB_TYPE_VENDOR,  // Request Type
-            request,                                    // Request
-            value,                                      // Value (unused)
-            index,                                      // Index (unused)
-            buffer,                                     // Buffer
-            len,                                        // Length
-            0                                           // Timeout
-        )
-
-        // Release USB interface
-        connection.releaseInterface(usbInterface)
-
-        return transferredLength
     }
 
     @Throws(RfSourceException::class)
-     fun setTransceiverMode(mode: Int): Boolean {
+    fun setTransceiverMode(mode: Int): Boolean {
         if (mode < 0 || mode > 2) {
             Log.e(LOGTAG, "Invalid Transceiver Mode: $mode")
             return false
@@ -284,87 +267,110 @@ class HackRF
 
     @Throws(RfSourceException::class)
     override fun stop() {
-        receiveJob?.cancel()
-        receiveJob = null
-        transmitJob?.cancel()
-        transmitJob = null
 
-        // Signal the HackRF Device to turn off the transceiver
-        this.setTransceiverMode(HACKRF_TRANSCEIVER_MODE_OFF)
+                receiveJob?.cancel()
+                transmitJob?.cancel()
+
+
+        // Set mode first to ensure device stops streaming
+        try {
+            setTransceiverMode(HACKRF_TRANSCEIVER_MODE_OFF)
+        } catch (e: Exception) {
+            Log.e(LOGTAG, "Error setting transceiver mode off: ${e.message}")
+        }
+
+        // Clear queues
+        queue?.clear()
+        bufferPool?.clear()
+
+        // Release USB resources
+        try {
+            usbConnection?.releaseInterface(usbInterface)
+            usbConnection?.close()
+        } catch (e: Exception) {
+            Log.e(LOGTAG, "Error releasing USB interface: ${e.message}")
+        }
+
+        // Reset variables
+        usbInterface = null
+        usbConnection = null
+        usbEndpointIN = null
+        usbEndpointOUT = null
+        queue = null
+        bufferPool = null
+
+        receiveJob = null
+        transmitJob = null
     }
 
     override suspend fun receiveLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(NUM_USB_REQUEST)
-        var buffer: ByteBuffer
+        var isRunning = true
 
         try {
-            // Initialize and queue all USB requests
+            // Initialize USB requests
             for (i in 0 until NUM_USB_REQUEST) {
-                // Get a ByteBuffer from the buffer pool
-                buffer = ByteBuffer.wrap(this.getBufferFromBufferPool())
-
-                // Initialize the USB request
+                val buffer = ByteBuffer.wrap(getBufferFromBufferPool())
                 usbRequests[i] = UsbRequest().apply {
                     initialize(usbConnection, usbEndpointIN)
                     clientData = buffer
                 }
-
-                // Queue the request
-                //if (usbRequests[i]?.queue(buffer, getPacketSize()) == false) {
                 if (usbRequests[i]?.queue(buffer) == false) {
-                    Log.e(LOGTAG, "receiveLoop: Couldn't queue USB Request.")
-                    this.stop()
-                    return
+                    throw RfSourceException("Failed to queue initial USB Request")
                 }
             }
 
-            // Run loop until transceiver mode is RECEIVE and the receiver is active
-            while (this.transceiverMode == HACKRF_TRANSCEIVER_MODE_RECEIVE) {
-                // Wait for a request to return (this blocks until one of the requests is ready)
-                val request = usbConnection?.requestWait()
-                if (request == null) {
-                    Log.e(LOGTAG, "receiveLoop: Didn't receive USB Request.")
-                    break
-                }
+            while (isRunning && transceiverMode == HACKRF_TRANSCEIVER_MODE_RECEIVE) {
+                coroutineContext.ensureActive()  // Check if coroutine is still active
 
-                // Ensure we got a UsbRequest for the IN endpoint
-                if (request.endpoint != usbEndpointIN) {
+                val request = withTimeoutOrNull(1000) {
+                    usbConnection?.requestWait()
+                } ?: continue  // Use timeout instead of blocking indefinitely
+
+                if (request.endpoint != usbEndpointIN) continue
+
+                val buffer = request.clientData as ByteBuffer
+                transceivePacketCounter++
+
+                // Use a timeout when offering to queue
+                val queueSuccess = withTimeoutOrNull(100) {
+                    queue?.offer(buffer.array())
+                } ?: false
+
+                if (!queueSuccess) {
+                    Log.w(LOGTAG, "Queue is full, dropping packet")
+                    returnBufferToBufferPool(buffer.array())
                     continue
                 }
 
-                // Extract the buffer
-                buffer = request.clientData as ByteBuffer
-                this.transceivePacketCounter++
-
-                // Put the received samples into the queue
-                if (!queue?.offer(buffer.array())!!) {
-                    Log.e(LOGTAG, "receiveLoop: Queue is full. Stopping receive!")
-                    break
-                }
-
-                // Get a fresh ByteBuffer from the buffer pool
-                buffer = ByteBuffer.wrap(this.getBufferFromBufferPool())
-                request.clientData = buffer
-
-                // Requeue the request with the fresh buffer
-                //if (request.queue(buffer, packetSize) == false) {
-                if (!request.queue(buffer)) {
-                    Log.e(LOGTAG, "receiveLoop: Couldn't queue USB Request.")
-                    break
+                // Prepare next buffer
+                val nextBuffer = ByteBuffer.wrap(getBufferFromBufferPool())
+                request.clientData = nextBuffer
+                if (!request.queue(nextBuffer)) {
+                    isRunning = false
+                    Log.e(LOGTAG, "Failed to queue next USB Request")
                 }
             }
-        } catch (e: RfSourceException) {
-            Log.e(LOGTAG, "receiveLoop: USB Error!")
+        } catch (e: Exception) {
+            Log.e(LOGTAG, "receiveLoop error: ${e.message}")
         } finally {
-            // Clean up USB requests
-            usbRequests.forEach { it?.cancel() }
-
-            // If the transceiverMode is still RECEIVE, stop receiving
-            if (this.transceiverMode == HACKRF_TRANSCEIVER_MODE_RECEIVE) {
+            // Cleanup
+            usbRequests.forEach { request ->
                 try {
-                    this.stop()
-                } catch (e: RfSourceException) {
-                    Log.e(LOGTAG, "receiveLoop: Error while stopping RX!")
+                    request?.cancel()
+                    (request?.clientData as? ByteBuffer)?.let {
+                        returnBufferToBufferPool(it.array())
+                    }
+                } catch (e: Exception) {
+                    Log.e(LOGTAG, "Error cleaning up USB request: ${e.message}")
+                }
+            }
+
+            if (transceiverMode == HACKRF_TRANSCEIVER_MODE_RECEIVE) {
+                try {
+                    stop()
+                } catch (e: Exception) {
+                    Log.e(LOGTAG, "Error stopping device: ${e.message}")
                 }
             }
         }
@@ -467,12 +473,12 @@ class HackRF
         }
     }
 
-     private fun getPacketSize(): Int {
+    private fun getPacketSize(): Int {
         // return this.usbEndpointIN.maxPacketSize // <= gives 512 which is way too small
         return packetSize
     }
 
-     private fun getBufferFromBufferPool(): ByteArray {
+    private fun getBufferFromBufferPool(): ByteArray {
         var buffer: ByteArray? = bufferPool?.poll()
 
         // Check if we got a buffer:
@@ -483,7 +489,7 @@ class HackRF
         return buffer
     }
 
-     private fun returnBufferToBufferPool(buffer: ByteArray) {
+    private fun returnBufferToBufferPool(buffer: ByteArray) {
         if (buffer.size == getPacketSize()) {
             // Throw it into the pool (don't care if it's working or not):
             bufferPool?.offer(buffer)
@@ -679,7 +685,7 @@ class HackRF
     }
 
     @Throws(RfSourceException::class)
-     fun setFrequencyExplicit(ifFrequency: Long, loFrequency: Long, rfPath: Int): Boolean {
+    fun setFrequencyExplicit(ifFrequency: Long, loFrequency: Long, rfPath: Int): Boolean {
         val byteOut = ByteArrayOutputStream()
 
         // Check range of IF Frequency:
@@ -764,7 +770,7 @@ class HackRF
     }
 
     @Throws(RfSourceException::class)
-     fun getBoardID(): Byte {
+    fun getBoardID(): Byte {
         val buffer = ByteArray(1)
         if (sendUsbRequest(UsbConstants.USB_DIR_IN, HACKRF_VENDOR_REQUEST_BOARD_ID_READ, 0, 0, buffer) != 1) {
             Log.e(LOGTAG, "getBoardID: USB Transfer failed!")
@@ -773,7 +779,7 @@ class HackRF
         return buffer[0]
     }
 
-     fun convertBoardIdToString(boardID: Int): String {
+    fun convertBoardIdToString(boardID: Int): String {
         return when (boardID) {
             0 -> "Jellybean"
             1 -> "Jawbreaker"
@@ -784,7 +790,7 @@ class HackRF
     }
 
     @Throws(RfSourceException::class)
-     fun getVersionString(): String {
+    fun getVersionString(): String {
         val buffer = ByteArray(255)
         val len = this.sendUsbRequest(UsbConstants.USB_DIR_IN, HACKRF_VENDOR_REQUEST_VERSION_STRING_READ, 0, 0, buffer)
         if (len < 1) {
@@ -795,7 +801,7 @@ class HackRF
     }
 
     @Throws(RfSourceException::class)
-     fun getPartIdAndSerialNo(): IntArray {
+    fun getPartIdAndSerialNo(): IntArray {
         val buffer = ByteArray(8 + 16)
         val ret = IntArray(2 + 4)
         if (this.sendUsbRequest(UsbConstants.USB_DIR_IN, HACKRF_VENDOR_REQUEST_BOARD_PARTID_SERIALNO_READ, 0, 0, buffer) != 8 + 16) {
@@ -808,20 +814,20 @@ class HackRF
         return ret
     }
 
-     private fun getTransceiverPacketCounter(): Long {
+    private fun getTransceiverPacketCounter(): Long {
         return transceivePacketCounter
     }
 
-     private fun getTransceivingTime(): Long {
+    private fun getTransceivingTime(): Long {
         return if (transceiveStartTime == 0L) 0 else System.currentTimeMillis() - transceiveStartTime
     }
 
-     fun getAverageTransceiveRate(): Long {
+    fun getAverageTransceiveRate(): Long {
         val transTime = getTransceivingTime() / 1000  // Transfer Time in seconds
         return if (transTime == 0L) 0 else getTransceiverPacketCounter() * getPacketSize() / transTime
     }
 
-     fun getTransceiverMode(): Int {
+    fun getTransceiverMode(): Int {
         return transceiverMode
     }
 
@@ -894,15 +900,5 @@ class HackRF
         packetSize = pSize
         return true
     }
-
-    /*  override fun run() {
-      when (this.transceiverMode) {
-          HACKRF_TRANSCEIVER_MODE_RECEIVE -> receiveLoop()
-          HACKRF_TRANSCEIVER_MODE_TRANSMIT -> transmitLoop()
-          else -> {
-              // Do nothing
-          }
-      }
-  }*/
 
 }

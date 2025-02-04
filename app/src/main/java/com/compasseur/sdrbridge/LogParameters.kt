@@ -36,7 +36,6 @@ object LogParameters {
 
     // Append a new line to the log and notify the observer (UI)
     fun appendLine(message: String) {
-
         if (logList.size >= MAX_LOG_ENTRIES) {
             logList.removeAt(0) // Remove the oldest entry if the list is too long
         }

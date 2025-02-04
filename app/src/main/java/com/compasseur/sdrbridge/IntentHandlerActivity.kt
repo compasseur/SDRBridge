@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 
 /**
@@ -42,7 +41,7 @@ class IntentHandlerActivity : AppCompatActivity() {
         intent?.let { receivedIntent ->
             if (receivedIntent.action == Intent.ACTION_VIEW) {
                 val receivedData: Uri? = receivedIntent.data
-                Log.i(logTag, "Received: $receivedData")
+
                 LogParameters.appendLine("$logTag: Received: $receivedData")
 
                 val resultIntent = Intent().apply {
@@ -54,7 +53,6 @@ class IntentHandlerActivity : AppCompatActivity() {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                     putExtra("fromResultHandler", true)
                     data = receivedData
-                    //putExtra("parametres", data)
                 }
                 startActivity(mainIntent)
                 LogParameters.appendLine("$logTag, received Intent: $intent")

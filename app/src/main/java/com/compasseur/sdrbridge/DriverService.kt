@@ -16,6 +16,7 @@ import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder
 import com.compasseur.sdrbridge.rfsource.Airspy
 import kotlinx.coroutines.*
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.BindException
@@ -75,7 +76,6 @@ class DriverService : Service() {
     private var ampEnabled = false // -m
     private var antennaPowerEnabled = false // -n
     private var packingEnable = false
-    //private var transceiverMode = 1 // -o
 
     private var packetSize = 16384 // -ps
 
@@ -116,7 +116,7 @@ class DriverService : Service() {
                         "port: $serverPort\n" +
                         "frequency: $frequency\n" +
                         "samplerate: $samplerate\n" +
-                "packetSize: $packetSize"
+                        "packetSize: $packetSize"
             )
         }
         rfSource?.let {
@@ -181,7 +181,7 @@ class DriverService : Service() {
             } catch (e: BindException) {
                 LogParameters.appendLine("$logTag, Port $serverPort is already in use, try again...")
                 closeEverything()
-            }catch (e: Exception) {
+            } catch (e: Exception) {
                 LogParameters.appendLine("$logTag, Server error: ${e.message}")
                 closeEverything()
             }
@@ -192,13 +192,16 @@ class DriverService : Service() {
     //for sending the IQ samples to the outputStream and receiving commands from the
     //client app through the inputStream
     private suspend fun handleClientConnection(clientSocket: Socket) = withContext(Dispatchers.IO) {
-        inputStream = clientSocket.getInputStream()
-        outputStream = clientSocket.getOutputStream()
         try {
+            inputStream = clientSocket.getInputStream()
+            outputStream = clientSocket.getOutputStream()
             commandJob = launch(Dispatchers.IO) { listenForCommands(inputStream) }
             sampleJob = launch(Dispatchers.IO) { sendIqSamples(outputStream) }
             // Wait for both coroutines to complete or be cancelled
             joinAll(commandJob!!, sampleJob!!)
+
+        } catch (e: IOException) {
+            LogParameters.appendLine("$logTag, Client disconnected: ${e.message}")
         } finally {
             LogParameters.appendLine("$logTag, Client connection closed")
             closeEverything()
@@ -214,14 +217,12 @@ class DriverService : Service() {
                 coroutineContext.ensureActive()
                 var bytesRead = 0
                 while (bytesRead < 5) {
-
-                    val result = inputStream?.read(commandBuffer, bytesRead, 5 - bytesRead) ?: 0
+                    val result = inputStream?.read(commandBuffer, bytesRead, 5 - bytesRead) ?: -1
                     if (result == -1) {
                         LogParameters.appendLine("$logTag, End of stream reached")
                         return // Exit the loop on end of stream
                     }
                     bytesRead += result
-
                 }
                 val command = commandBuffer[0].toUByte().toInt()
                 val value = ((commandBuffer[1].toUByte().toLong() shl 24) or
@@ -229,10 +230,11 @@ class DriverService : Service() {
                         (commandBuffer[3].toUByte().toLong() shl 8) or
                         (commandBuffer[4].toUByte().toLong()))
                 handleCommand(command, value)
-                //delay(10)
             }
         } catch (e: Exception) {
             LogParameters.appendLine("$logTag, Error receiving command: ${e.message}")
+        } finally {
+            LogParameters.appendLine("$logTag, Listen for commands closed")
             closeEverything()
         }
     }
@@ -243,11 +245,10 @@ class DriverService : Service() {
     private suspend fun sendIqSamples(outputStream: OutputStream?) {
         try {
             LogParameters.appendLine("$logTag : sendIqSamples started")
-            val masterLiveShowDataQueue = ArrayBlockingQueue<ByteArray>(2)
-            val basebandFilterWidth = rfSource!!.computeBasebandFilterBandwidth(10000000)
+            val basebandFilterWidth = rfSource!!.computeBasebandFilterBandwidth(basebandFilterBandwidth)
             var byteReceivedQueue: ArrayBlockingQueue<ByteArray>? = null
-            if (rfSource is HackRF) byteReceivedQueue = rfSource!!.startRX()
-            rfSource!!.apply {
+            if (rfSource is HackRF) byteReceivedQueue = rfSource?.startRX()
+            rfSource?.apply {
                 setPacketSize(packetSize)
                 LogParameters.appendLine("$logTag : packetSize set")
                 setSampleRate(samplerate, 1)
@@ -276,12 +277,12 @@ class DriverService : Service() {
                 setRawMode(true)
                 LogParameters.appendLine("$logTag : raw mode set")
             }
-            if (rfSource is Airspy) byteReceivedQueue = rfSource!!.startRX()
-            while (true) {
+            if (rfSource is Airspy) byteReceivedQueue = rfSource?.startRX()
+            while (serverSocket?.isClosed == false) {
                 coroutineContext.ensureActive()
+
                 val receivedBytes: ByteArray? = byteReceivedQueue?.poll(1000, TimeUnit.MILLISECONDS)
                 if (receivedBytes == null || receivedBytes.isEmpty()) break
-                if (masterLiveShowDataQueue.remainingCapacity() <= 0) masterLiveShowDataQueue.poll()
 
                 outputStream?.apply {
                     write(receivedBytes)
@@ -290,6 +291,7 @@ class DriverService : Service() {
             }
         } catch (e: Exception) {
             LogParameters.appendLine("$logTag, Error sending samples: ${e.message}")
+        } finally {
             closeEverything()
         }
     }
@@ -320,13 +322,29 @@ class DriverService : Service() {
             LogParameters.appendLine("$logTag, Problem sending command: $command - $value")
             closeEverything()
         }
-        if (command != commandSetFrequency)LogParameters.appendLine("$logTag, handleCommand: $command - $value")
+        if (command != commandSetFrequency) LogParameters.appendLine("$logTag, handleCommand: $command - $value")
     }
 
     private fun closeEverything() {
         LogParameters.appendLine("$logTag, Closing driver service. closeEverything()")
 
         try {
+            rfSource?.stop()
+            rfSource = null
+            LogParameters.appendLine("$logTag, RF source stopped")
+
+            inputStream?.close()
+            inputStream = null
+            LogParameters.appendLine("$logTag, Input stream closed")
+
+            outputStream?.close()
+            outputStream = null
+            LogParameters.appendLine("$logTag, Output stream closed")
+
+            serverSocket?.close()
+            serverSocket = null
+            LogParameters.appendLine("$logTag, Server socket closed")
+
             commandJob?.cancel()
             commandJob = null
             LogParameters.appendLine("$logTag, Command job canceled")
@@ -337,22 +355,6 @@ class DriverService : Service() {
 
             serviceScope.cancel()
             LogParameters.appendLine("$logTag, Service scope canceled")
-
-            serverSocket?.close()
-            serverSocket = null
-            LogParameters.appendLine("$logTag, Server socket closed")
-
-            inputStream?.close()
-            inputStream = null
-            LogParameters.appendLine("$logTag, Input stream closed")
-
-            outputStream?.close()
-            outputStream = null
-            LogParameters.appendLine("$logTag, Output stream closed")
-
-            rfSource?.stop()
-            rfSource = null
-            LogParameters.appendLine("$logTag, RF source stopped")
 
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()

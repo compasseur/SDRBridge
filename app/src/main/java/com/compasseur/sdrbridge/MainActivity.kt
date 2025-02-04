@@ -70,9 +70,12 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             usbManager = usbManager,
             onPermissionGranted = { device ->
                 rfSource = when {
+
                     device.vendorId == hackRFVendorID && device.productId == hackRFProductID -> HackRF(usbManager, device, 20000000 * 2)
+                    device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID -> HackRF(usbManager, device, 20000000 * 2)
+                    device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID -> HackRF(usbManager, device, 20000000 * 2)
                     device.vendorId == airspyMiniVendorID && device.productId == airspyMiniProductID -> Airspy(usbManager, device, 1000000 * 2)
-                    else -> HackRF(usbManager, device, 200000000 * 2)
+                    else -> null //HackRF(usbManager, device, 200000000 * 2)
                 }
                 rfSource?.initializeRfSource(this, this, device, usbManager, 200000000 * 2)
                 val deviceDetecte = if (rfSource is HackRF) "HAckRF" else if (rfSource is Airspy) "Airspy" else "Nothing"
@@ -114,7 +117,6 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
 
     private fun usbPermissionChecker() {
         usbPermissionManager.findRfSourceDevice()?.let { device ->
-            //LogParameters.appendLine("$logTag:  /// ${RfSourceHolder.rfSource}")
             LogParameters.appendLine("$logTag:  /// ${device.productName}")
             usbPermissionManager.checkUsbPermission(device)
         }
@@ -149,7 +151,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     }
 
     private fun observeLogParametersChanges() {
-        lifecycleScope.launch {
+        logChangedJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) { // Runs when the lifecycle is at least STARTED
                 try {
                     LogParameters.logFlow.collect { log ->
@@ -199,6 +201,5 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             setPositiveButton("OK") { _, _ -> }
         }.create().show()
     }
-
 }
 

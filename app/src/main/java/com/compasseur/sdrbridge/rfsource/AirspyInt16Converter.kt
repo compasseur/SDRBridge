@@ -1,7 +1,6 @@
 package com.compasseur.sdrbridge.rfsource
 
 import android.util.Log
-import com.compasseur.sdrbridge.rfsource.Airspy
 import java.lang.Exception
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -51,7 +50,7 @@ class AirspyInt16Converter(
         this.outputPoolQueue = outputPoolQueue
         this.len = HB_KERNEL_INT16.size
         this.delayLine = ShortArray(this.len / 2)
-        this.firQueue = IntArray(this.len * AirspyInt16Converter.Companion.SIZE_FACTOR)
+        this.firQueue = IntArray(this.len * SIZE_FACTOR)
     }
 
     fun requestStop() {
