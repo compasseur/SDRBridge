@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.compasseur.sdrbridge"
-        minSdk = 33
+        minSdk = 33 //33
         targetSdk = 34
         versionCode = 2
         versionName = "1.01"

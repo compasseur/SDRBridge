@@ -42,7 +42,7 @@ class IntentHandlerActivity : AppCompatActivity() {
             if (receivedIntent.action == Intent.ACTION_VIEW) {
                 val receivedData: Uri? = receivedIntent.data
 
-                LogParameters.appendLine("$logTag: Received: $receivedData")
+                LogParameters.appendLine("$logTag, Received: $receivedData")
 
                 val resultIntent = Intent().apply {
                     putExtra("message", "HackRF Initialized")

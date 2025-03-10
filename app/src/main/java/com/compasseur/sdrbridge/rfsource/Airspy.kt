@@ -186,7 +186,7 @@ class Airspy
         return try {
             val airSpy = Airspy(usbManager, device, queueSize)
             val version = getVersionString()
-            LogParameters.appendLine("$logTag: Airspy version: $version")
+            LogParameters.appendLine("$logTag, Airspy version: $version")
             callbackInterface.onRfSourceReady(airSpy)
             return true
         } catch (e: Exception) {

@@ -44,16 +44,16 @@ class UsbPermissionManager(
 
     private val usbPermissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            LogParameters.appendLine("$logTag: PERMISSION: ${intent?.action}")
+            LogParameters.appendLine("$logTag, PERMISSION: ${intent?.action}")
             if (intent?.action == ACTION_USB_PERMISSION) {
                 synchronized(this) {
                     val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted && device != null) {
-                        LogParameters.appendLine("$logTag: Permission granted for ${device.productName}")
+                        LogParameters.appendLine("$logTag, Permission granted for ${device.productName}")
                         onPermissionGranted(device) // Call the callback if permission granted
                     } else {
-                        LogParameters.appendLine("$logTag: Permission denied for ${device?.productName}")
+                        LogParameters.appendLine("$logTag, Permission denied for ${device?.productName}")
                         onPermissionDenied()
                     }
                 }
@@ -70,7 +70,7 @@ class UsbPermissionManager(
         try {
             context.unregisterReceiver(usbPermissionReceiver)
         } catch (e: IllegalArgumentException) {
-            LogParameters.appendLine("$logTag: Receiver was not registered or already unregistered.")
+            LogParameters.appendLine("$logTag, Receiver was not registered or already unregistered.")
         }
     }
 
@@ -79,10 +79,10 @@ class UsbPermissionManager(
             registerReceiver()
         }
         if (usbManager.hasPermission(device)) {
-            LogParameters.appendLine("$logTag: Already has permission for ${device.productName}")
+            LogParameters.appendLine("$logTag, Already has permission for ${device.productName}")
             onPermissionGranted(device)
         } else {
-            LogParameters.appendLine("$logTag: Requesting permission for ${device.productName}")
+            LogParameters.appendLine("$logTag, Requesting permission for ${device.productName}")
             val permissionIntent = PendingIntent.getBroadcast(
                 context, 0, Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
@@ -99,7 +99,7 @@ class UsbPermissionManager(
             (it.vendorId == hackRFRad1oVendorID && it.productId == hackRFRad1oProductID) ||
             (it.vendorId == airspyMiniVendorID && it.productId == airspyMiniProductID)
         }
-        LogParameters.appendLine("$logTag: Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId} - ${foundDevice?.version}")
+        LogParameters.appendLine("$logTag, Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId} - ${foundDevice?.version}")
         return foundDevice
     }
 }

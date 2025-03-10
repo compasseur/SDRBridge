@@ -79,11 +79,11 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
                 }
                 rfSource?.initializeRfSource(this, this, device, usbManager, 200000000 * 2)
                 val deviceDetecte = if (rfSource is HackRF) "HAckRF" else if (rfSource is Airspy) "Airspy" else "Nothing"
-                LogParameters.appendLine("$logTag: Permission granted for $deviceDetecte, starting service with ${device.productName}")
+                LogParameters.appendLine("$logTag, Permission granted for $deviceDetecte, starting service with ${device.productName}")
             },
             onPermissionDenied = {
                 Log.w(logTag, "Permission denied for HackRF.")
-                LogParameters.appendLine("$logTag: Permission denied for HackRF.")
+                LogParameters.appendLine("$logTag, Permission denied for HackRF.")
             }
         )
         usbPermissionManager.registerReceiver()
@@ -96,7 +96,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
         fromResultHandler = intent.getBooleanExtra("fromResultHandler", false)
         if (fromResultHandler) {
             intentParameters = intent.data
-            LogParameters.appendLine("$logTag: Intent received data = $intentParameters")
+            LogParameters.appendLine("$logTag, Intent received data = $intentParameters")
             usbPermissionChecker()
             Handler(Looper.getMainLooper()).post {
                 // Move task to the background to keep the client app in the foreground
@@ -117,7 +117,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
 
     private fun usbPermissionChecker() {
         usbPermissionManager.findRfSourceDevice()?.let { device ->
-            LogParameters.appendLine("$logTag:  /// ${device.productName}")
+            LogParameters.appendLine("$logTag,  /// ${device.productName}")
             usbPermissionManager.checkUsbPermission(device)
         }
     }
@@ -140,14 +140,14 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     override fun onRfSourceReady(sourcerf: RfSource) {
         RfSourceHolder.rfSource = sourcerf
         if (fromResultHandler) {
-            LogParameters.appendLine("$logTag: Source is ready !!! Starting driver service")
+            LogParameters.appendLine("$logTag, Source is ready !!! Starting driver service")
             startDriverService()
         }
     }
 
     //Receives callback from device class with error
     override fun onRfSourceError(message: String) {
-        LogParameters.appendLine("$logTag: Error on source callback !!! $message")
+        LogParameters.appendLine("$logTag, Error on source callback !!! $message")
     }
 
     private fun observeLogParametersChanges() {
@@ -191,7 +191,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             startActivity(intentWeb)
         } catch (e: Exception) {
             Toast.makeText(this@MainActivity, "Could not load the browser. You can visit $url.", Toast.LENGTH_LONG).show()
-            LogParameters.appendLine("$logTag: Error opening browser: ${e.message}")
+            LogParameters.appendLine("$logTag, Error opening browser: ${e.message}")
         }
     }
 

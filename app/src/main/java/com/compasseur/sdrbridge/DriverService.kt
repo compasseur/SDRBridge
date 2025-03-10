@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.IBinder
+import android.util.Log
 import com.compasseur.sdrbridge.rfsource.HackRF
 import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder
@@ -84,6 +85,8 @@ class DriverService : Service() {
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
 
+    private var driverIsrunning = false
+
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onCreate() {
@@ -94,7 +97,7 @@ class DriverService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = createNotification()
-        LogParameters.appendLine("$logTag: Driver started: $intent \n${intent?.data}\n${RfSourceHolder.rfSource}")
+        LogParameters.appendLine("$logTag, Driver started: $intent \n${intent?.data}\n${RfSourceHolder.rfSource}")
         startForeground(NOTIFICATION_ID, notification)
 
         rfSource = RfSourceHolder.rfSource
@@ -170,14 +173,12 @@ class DriverService : Service() {
                     bind(InetSocketAddress(serverPort))
                 }
                 LogParameters.appendLine("$logTag, Server started on port $serverPort")
-                while (true) {
-                    val clientSocket = serverSocket?.accept()
+                while (serverSocket?.isClosed == false) {
+                    val clientSocket = serverSocket?.accept() ?: break
                     LogParameters.appendLine("$logTag, Client connected: ${clientSocket?.inetAddress}")
-                    clientSocket?.let { socket ->
-                        handleClientConnection(socket)
-                        false
-                    }
+                    handleClientConnection(clientSocket)
                 }
+
             } catch (e: BindException) {
                 LogParameters.appendLine("$logTag, Port $serverPort is already in use, try again...")
                 closeEverything()
@@ -195,6 +196,7 @@ class DriverService : Service() {
         try {
             inputStream = clientSocket.getInputStream()
             outputStream = clientSocket.getOutputStream()
+            driverIsrunning = true
             commandJob = launch(Dispatchers.IO) { listenForCommands(inputStream) }
             sampleJob = launch(Dispatchers.IO) { sendIqSamples(outputStream) }
             // Wait for both coroutines to complete or be cancelled
@@ -210,11 +212,11 @@ class DriverService : Service() {
 
     //Listens for commands from the client app and converts them before handling them
     private suspend fun listenForCommands(inputStream: InputStream?) {
-        LogParameters.appendLine("$logTag : listenForCommands started")
+        LogParameters.appendLine("$logTag, listenForCommands started")
         val commandBuffer = ByteArray(5)
         try {
-            while (true) {
-                coroutineContext.ensureActive()
+            //while (true) {
+            while (driverIsrunning) {
                 var bytesRead = 0
                 while (bytesRead < 5) {
                     val result = inputStream?.read(commandBuffer, bytesRead, 5 - bytesRead) ?: -1
@@ -244,42 +246,41 @@ class DriverService : Service() {
     //fast enough
     private suspend fun sendIqSamples(outputStream: OutputStream?) {
         try {
-            LogParameters.appendLine("$logTag : sendIqSamples started")
+            LogParameters.appendLine("$logTag, sendIqSamples started")
             val basebandFilterWidth = rfSource!!.computeBasebandFilterBandwidth(basebandFilterBandwidth)
             var byteReceivedQueue: ArrayBlockingQueue<ByteArray>? = null
             if (rfSource is HackRF) byteReceivedQueue = rfSource?.startRX()
             rfSource?.apply {
                 setPacketSize(packetSize)
-                LogParameters.appendLine("$logTag : packetSize set")
+                LogParameters.appendLine("$logTag, packetSize set")
                 setSampleRate(samplerate, 1)
-                LogParameters.appendLine("$logTag : samplerate set")
+                LogParameters.appendLine("$logTag, samplerate set")
                 setFrequency(frequency)
-                LogParameters.appendLine("$logTag : frequency set")
+                LogParameters.appendLine("$logTag, frequency set")
                 setRxVGAGain(rxVgaGain)
-                LogParameters.appendLine("$logTag : VGA gain set")
+                LogParameters.appendLine("$logTag, VGA gain set")
                 setRxLNAGain(rxLnaGain)
-                LogParameters.appendLine("$logTag : LNA gain set")
+                LogParameters.appendLine("$logTag, LNA gain set")
                 setRxMixerGain(rxMixGain)
-                LogParameters.appendLine("$logTag : Mixer Gain set")
+                LogParameters.appendLine("$logTag, Mixer Gain set")
                 setPacking(packingEnable)
-                LogParameters.appendLine("$logTag : packing set")
+                LogParameters.appendLine("$logTag, packing set")
                 setBasebandFilterBandwidth(basebandFilterWidth)
-                LogParameters.appendLine("$logTag : filter BW set")
+                LogParameters.appendLine("$logTag, filter BW set")
                 setRxLNAAGC(agcLnaEnable)
-                LogParameters.appendLine("$logTag : LNA AGC set")
+                LogParameters.appendLine("$logTag, LNA AGC set")
                 setRxMixerAGC(agcMixEnable)
-                LogParameters.appendLine("$logTag : Mixer AGC set")
+                LogParameters.appendLine("$logTag, Mixer AGC set")
                 setAmp(false)
-                LogParameters.appendLine("$logTag : amp set")
+                LogParameters.appendLine("$logTag, amp set")
                 setAntennaPower(false)
-                LogParameters.appendLine("$logTag : antenna power set")
+                LogParameters.appendLine("$logTag, antenna power set")
                 //setSampleType(sampleType)
                 setRawMode(true)
-                LogParameters.appendLine("$logTag : raw mode set")
+                LogParameters.appendLine("$logTag, raw mode set")
             }
             if (rfSource is Airspy) byteReceivedQueue = rfSource?.startRX()
-            while (serverSocket?.isClosed == false) {
-                coroutineContext.ensureActive()
+            while (driverIsrunning) {
 
                 val receivedBytes: ByteArray? = byteReceivedQueue?.poll(1000, TimeUnit.MILLISECONDS)
                 if (receivedBytes == null || receivedBytes.isEmpty()) break
@@ -300,35 +301,35 @@ class DriverService : Service() {
     private fun handleCommand(command: Int, value: Long) {
         val boolVal: Boolean = value != 0L
         try {
-            when (command) {
-                commandSetFrequency -> rfSource?.setFrequency(value)
-                commandSetVgaGain -> rfSource?.setRxVGAGain(value.toInt())
-                commandSetLnaGain -> rfSource?.setRxLNAGain(value.toInt())
-                commandSetMixerGain -> rfSource?.setRxMixerGain(value.toInt())
-                commandSetSamplerate -> rfSource?.setSampleRate(value.toInt(), 1)
-                commandSetBaseBandFilter -> rfSource?.setBasebandFilterBandwidth(value.toInt())
-                commandSetAmpEnable -> rfSource?.setAmp(boolVal)
-                commandSetAntennaPowerEnable -> rfSource?.setAntennaPower(boolVal)
-                commandSetPacketSize -> rfSource?.setPacketSize(value.toInt())
+            val result = when (command) {
+                commandSetFrequency -> "Frequency set to $value: ${rfSource?.setFrequency(value)}"
+                commandSetVgaGain -> "VGA gain set to $value: ${rfSource?.setRxVGAGain(value.toInt())}"
+                commandSetLnaGain -> "LNA gain set to $value: ${rfSource?.setRxLNAGain(value.toInt())}"
+                commandSetMixerGain -> "Mixer gain set to $value: ${rfSource?.setRxMixerGain(value.toInt())}"
+                commandSetSamplerate -> "Sample rate set to $value: ${rfSource?.setSampleRate(value.toInt(), 1)}"
+                commandSetBaseBandFilter -> "Baseband filter set to $value: ${rfSource?.setBasebandFilterBandwidth(value.toInt())}"
+                commandSetAmpEnable -> "Amp enabled: $value: ${rfSource?.setAmp(boolVal)}"
+                commandSetAntennaPowerEnable -> "Antenna power enabled: $value: ${rfSource?.setAntennaPower(boolVal)}"
+                commandSetPacketSize -> "Packet size set to $value: ${rfSource?.setPacketSize(value.toInt())}"
                 commandSetAndroidExit -> {
-                    LogParameters.appendLine("$logTag, Received EXIT command. Closing...")
                     closeEverything()
+                    "Received EXIT command. Closing..."
                 }
-                else -> {
-                    LogParameters.appendLine("$logTag, Unknown command: $command - $value")
-                }
+                else -> "Unknown command: $command - $value"
             }
+            if (command != commandSetFrequency) LogParameters.appendLine("$logTag, $result")
         } catch (e: Exception) {
             LogParameters.appendLine("$logTag, Problem sending command: $command - $value")
             closeEverything()
         }
-        if (command != commandSetFrequency) LogParameters.appendLine("$logTag, handleCommand: $command - $value")
     }
 
     private fun closeEverything() {
-        LogParameters.appendLine("$logTag, Closing driver service. closeEverything()")
-
+        if (!driverIsrunning) return
+        driverIsrunning = false
+        LogParameters.appendLine("$logTag, Closing driver service. closeEverything")
         try {
+
             rfSource?.stop()
             rfSource = null
             LogParameters.appendLine("$logTag, RF source stopped")
