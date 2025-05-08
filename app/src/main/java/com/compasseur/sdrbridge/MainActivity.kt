@@ -59,6 +59,9 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     private var logChangedJob: Job? = null
     private var fromResultHandler = false
 
+    private var queueSizeHackrf = 1000000 * 2
+    private var queueSizeAirspy = 1000000
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -71,19 +74,27 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             onPermissionGranted = { device ->
                 rfSource = when {
 
-                    device.vendorId == hackRFVendorID && device.productId == hackRFProductID -> HackRF(usbManager, device, 20000000 * 2)
-                    device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID -> HackRF(usbManager, device, 20000000 * 2)
-                    device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID -> HackRF(usbManager, device, 20000000 * 2)
-                    device.vendorId == airspyMiniVendorID && device.productId == airspyMiniProductID -> Airspy(usbManager, device, 1000000 * 2)
+                    device.vendorId == hackRFVendorID && device.productId == hackRFProductID -> HackRF(usbManager, device, queueSizeHackrf)
+                    device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID -> HackRF(usbManager, device, queueSizeHackrf)
+                    device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID -> HackRF(usbManager, device, queueSizeHackrf)
+                    device.vendorId == airspyMiniVendorID && device.productId == airspyMiniProductID -> Airspy(usbManager, device, queueSizeAirspy)
                     else -> null //HackRF(usbManager, device, 200000000 * 2)
                 }
-                rfSource?.initializeRfSource(this, this, device, usbManager, 200000000 * 2)
-                val deviceDetecte = if (rfSource is HackRF) "HAckRF" else if (rfSource is Airspy) "Airspy" else "Nothing"
+                //rfSource?.initializeRfSource(this, this, device, usbManager, 200000000 * 2)
+                rfSource?.initializeRfSource(this, this, device, usbManager, queueSizeHackrf)
+                val deviceDetecte = if (rfSource is HackRF) "HackRF" else if (rfSource is Airspy) "Airspy" else "Nothing"
                 LogParameters.appendLine("$logTag, Permission granted for $deviceDetecte, starting service with ${device.productName}")
             },
             onPermissionDenied = {
                 Log.w(logTag, "Permission denied for HackRF.")
                 LogParameters.appendLine("$logTag, Permission denied for HackRF.")
+            },
+            onHackrfDisconnected = { device ->
+                val stopIntent = Intent(this, DriverService::class.java).apply {
+                    action = "ACTION_STOP_DRIVER"
+                }
+                startService(stopIntent)
+                LogParameters.appendLine("$logTag, HackRF disconnected: ${device.deviceName}")
             }
         )
         usbPermissionManager.registerReceiver()
@@ -170,7 +181,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     private fun showAbout() {
         val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "Compasseur", "Privacy policy")
         AlertDialog.Builder(this).apply {
-            setTitle("About "+getString(R.string.version_number))
+            setTitle("About " + getString(R.string.version_number))
             setItems(listOfChoices) { dialogInterface, i ->
                 when (i) {
                     0 -> openWebPage("https://github.com/compasseur/SDRBridge")

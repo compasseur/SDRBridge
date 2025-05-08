@@ -10,6 +10,7 @@ import android.hardware.usb.UsbManager
 import android.hardware.usb.UsbRequest
 import android.util.Log
 import android.widget.Toast
+import com.compasseur.sdrbridge.LogParameters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -67,7 +68,6 @@ import kotlin.coroutines.coroutineContext
  */
 
 class HackRF
-
 @Throws(RfSourceException::class) constructor(usbManager: UsbManager, usbDevice: UsbDevice, queueSize: Int) : RfSource {
     // Attributes to hold the USB related objects:
     private var usbInterface: UsbInterface? = null
@@ -129,7 +129,7 @@ class HackRF
     }
 
     init {
-        Log.i(LOGTAG, "constructor: create com.s33me.myhackrf.Hackrf instance from ${usbDevice.deviceName}. Vendor ID: ${usbDevice.vendorId} Product ID: ${usbDevice.productId}")
+        Log.i(LOGTAG, "constructor: create Hackrf instance from ${usbDevice.deviceName}. Vendor ID: ${usbDevice.vendorId} Product ID: ${usbDevice.productId}")
         Log.i(LOGTAG, "constructor: device protocol: ${usbDevice.deviceProtocol}")
         Log.i(LOGTAG, "constructor: device class: ${usbDevice.deviceClass} subclass: ${usbDevice.deviceSubclass}")
         Log.i(LOGTAG, "constructor: interface count: ${usbDevice.interfaceCount}")
@@ -149,10 +149,12 @@ class HackRF
             // For detailed trouble shooting: Read out endpoint information of the interface:
             Log.i(
                 LOGTAG,
-                "constructor:     [endpoint 0 (IN)] address: ${usbEndpointIN!!.address} attributes: ${usbEndpointIN!!.attributes} direction: ${usbEndpointIN!!.direction} max_packet_size: ${usbEndpointIN!!.maxPacketSize}")
+                "constructor:     [endpoint 0 (IN)] address: ${usbEndpointIN!!.address} attributes: ${usbEndpointIN!!.attributes} direction: ${usbEndpointIN!!.direction} max_packet_size: ${usbEndpointIN!!.maxPacketSize}"
+            )
             Log.i(
                 LOGTAG,
-                "constructor:     [endpoint 1 (OUT)] address: ${usbEndpointOUT!!.address} attributes: ${usbEndpointOUT!!.attributes} direction: ${usbEndpointOUT!!.direction} max_packet_size: ${usbEndpointOUT!!.maxPacketSize}")
+                "constructor:     [endpoint 1 (OUT)] address: ${usbEndpointOUT!!.address} attributes: ${usbEndpointOUT!!.attributes} direction: ${usbEndpointOUT!!.direction} max_packet_size: ${usbEndpointOUT!!.maxPacketSize}"
+            )
 
             // Open the device:
             this.usbConnection = usbManager.openDevice(usbDevice)
@@ -215,7 +217,8 @@ class HackRF
 
         if (sendUsbRequest(
                 UsbConstants.USB_DIR_OUT, HACKRF_VENDOR_REQUEST_SET_TRANSCEIVER_MODE,
-                mode, 0, null) != 0
+                mode, 0, null
+            ) != 0
         ) {
             Log.e(LOGTAG, "setTransceiverMode: USB Transfer failed!")
             return false
@@ -254,7 +257,7 @@ class HackRF
         // Signal the HackRF Device to start transmitting
         this.setTransceiverMode(HACKRF_TRANSCEIVER_MODE_TRANSMIT)
 
-        transmitJob = coroutineScope.launch{
+        transmitJob = coroutineScope.launch {
             transmitLoop()
         }
 
@@ -267,17 +270,18 @@ class HackRF
 
     @Throws(RfSourceException::class)
     override fun stop() {
-
-                receiveJob?.cancel()
-                transmitJob?.cancel()
-
-
+        transceiverMode = HACKRF_TRANSCEIVER_MODE_OFF
         // Set mode first to ensure device stops streaming
         try {
-            setTransceiverMode(HACKRF_TRANSCEIVER_MODE_OFF)
+            setTransceiverMode(transceiverMode)
+            //this.sendUsbRequest(UsbConstants.USB_DIR_OUT, HACKRF_VENDOR_REQUEST_SET_TRANSCEIVER_MODE, HACKRF_TRANSCEIVER_MODE_OFF, 0, null)
+
         } catch (e: Exception) {
             Log.e(LOGTAG, "Error setting transceiver mode off: ${e.message}")
         }
+
+        /*receiveJob?.cancel()
+        transmitJob?.cancel()*/
 
         // Clear queues
         queue?.clear()
@@ -299,11 +303,14 @@ class HackRF
         queue = null
         bufferPool = null
 
+        receiveJob?.cancel()
+        transmitJob?.cancel()
         receiveJob = null
         transmitJob = null
+        Log.e(LOGTAG, "Closed stuff")
     }
 
-    override suspend fun receiveLoop() {
+    /*override suspend fun receiveLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(NUM_USB_REQUEST)
         var isRunning = true
 
@@ -347,6 +354,9 @@ class HackRF
                 val nextBuffer = ByteBuffer.wrap(getBufferFromBufferPool())
                 request.clientData = nextBuffer
                 if (!request.queue(nextBuffer)) {
+                    ////////////
+                    returnBufferToBufferPool(nextBuffer.array())
+                    ////////////
                     isRunning = false
                     Log.e(LOGTAG, "Failed to queue next USB Request")
                 }
@@ -374,19 +384,79 @@ class HackRF
                 }
             }
         }
+    }*/
+
+    override suspend fun receiveLoop() {
+        val usbRequests = arrayOfNulls<UsbRequest>(NUM_USB_REQUEST)
+        var isRunning = true
+
+        try {
+            // Initialize USB requests
+            for (i in 0 until NUM_USB_REQUEST) {
+                val buffer = ByteBuffer.wrap(getBufferFromBufferPool())
+                usbRequests[i] = UsbRequest().apply {
+                    initialize(usbConnection, usbEndpointIN)
+                    clientData = buffer
+                }
+                if (!usbRequests[i]!!.queue(buffer)) {
+                    throw RfSourceException("Failed to queue initial USB Request")
+                }
+            }
+
+            while (isRunning && transceiverMode == HACKRF_TRANSCEIVER_MODE_RECEIVE) {
+                coroutineContext.ensureActive()  // Check if coroutine is still active
+                val request = withTimeoutOrNull(1000) {
+                    usbConnection?.requestWait()
+                } ?: continue
+
+                if (request.endpoint != usbEndpointIN) continue
+
+                val buffer = request.clientData as ByteBuffer
+                transceivePacketCounter++
+
+                val offered = withTimeoutOrNull(100) {
+                    queue?.offer(buffer.array())
+                } ?: false
+
+                if (!offered) {
+                    Log.w(LOGTAG, "Queue is full, dropping packet")
+                    returnBufferToBufferPool(buffer.array())
+                }
+                // Prepare next buffer
+                val nextBuffer = ByteBuffer.wrap(getBufferFromBufferPool())
+                request.clientData = nextBuffer
+                if (!request.queue(nextBuffer)) {
+                    Log.e(LOGTAG, "Failed to queue next USB Request")
+                    returnBufferToBufferPool(nextBuffer.array())
+                    isRunning = false
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(LOGTAG, "receiveLoop error: ${e.message}")
+        } finally {
+            usbRequests.forEach { request ->
+                try {
+                    request?.cancel()
+                    (request?.clientData as? ByteBuffer)?.let {
+                        returnBufferToBufferPool(it.array())
+                    }
+                } catch (e: Exception) {
+                    Log.e(LOGTAG, "Error cleaning up USB request: ${e.message}")
+                }
+            }
+            Log.i(LOGTAG, "receiveLoop exited cleanly")
+        }
     }
 
-    //Not implemented
     override suspend fun transmitLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(NUM_USB_REQUEST)
         var buffer: ByteBuffer
         var packet: ByteArray?
-
         try {
             // Create, initialize, and queue all USB requests:
             for (i in 0 until NUM_USB_REQUEST) {
                 // Get a packet from the queue:
-                packet = withContext(Dispatchers.IO){
+                packet = withContext(Dispatchers.IO) {
                     queue?.poll(1000, TimeUnit.MILLISECONDS)
                 }
                 if (packet == null || packet.size != getPacketSize()) {
@@ -405,8 +475,10 @@ class HackRF
                 }
 
                 // Queue the request
-                if (!usbRequests[i]!!.queue(buffer)) {
-                    Log.e(LOGTAG, "transmitLoop: Couldn't queue USB Request.")
+                //if (!usbRequests[i]!!.queue(buffer)) {
+                    if (!usbRequests[i]!!.queue(buffer, getPacketSize())) {
+
+                        Log.e(LOGTAG, "transmitLoop: Couldn't queue USB Request.")
                     this.stop()
                     break
                 }
@@ -433,9 +505,13 @@ class HackRF
                 this.returnBufferToBufferPool(buffer.array())
 
                 // Get the next packet from the queue:
-                packet = withContext(Dispatchers.IO){
+                packet = withContext(Dispatchers.IO) {
                     queue?.poll(1000, TimeUnit.MILLISECONDS)
                 }
+
+                /*val samplePreview = packet?.take(32)?.joinToString(", ") { it.toString() }
+                Log.e(LOGTAG, "TX Packet preview: $samplePreview")*/
+
                 if (packet == null || packet.size != getPacketSize()) {
                     Log.e(LOGTAG, "transmitLoop: Queue empty or wrong packet format. Stop transmitting.")
                     break
@@ -446,8 +522,10 @@ class HackRF
                 request.clientData = buffer
 
                 // Queue the request again...
-                if (!request.queue(buffer)) {
-                    Log.e(LOGTAG, "transmitLoop: Couldn't queue USB Request.")
+                //if (!request.queue(buffer)) {
+                    if (!request.queue(buffer, getPacketSize())) {
+
+                        Log.e(LOGTAG, "transmitLoop: Couldn't queue USB Request.")
                     break
                 }
             }
@@ -455,30 +533,122 @@ class HackRF
             Log.e(LOGTAG, "transmitLoop: USB Error!")
         } catch (e: InterruptedException) {
             Log.e(LOGTAG, "transmitLoop: Interrupted while waiting on queue!")
-        }
-
-        // Transmitting is done. Cancel and close all USB requests:
-        for (request in usbRequests) {
-            request?.cancel()
-            // request.close() // This will cause the VM to crash with a SIGABRT when the next transceive starts?!?
-        }
-
-        // If the transceiverMode is still on TRANSMIT, we stop transmitting:
-        if (this.transceiverMode == HACKRF_TRANSCEIVER_MODE_TRANSMIT) {
-            try {
-                this.stop()
-            } catch (e: RfSourceException) {
-                Log.e(LOGTAG, "transmitLoop: Error while stopping TX!")
+        }finally {
+            // Transmitting is done. Cancel and close all USB requests:
+            for (request in usbRequests) {
+                request?.cancel()
+                request?.close() // This will cause the VM to crash with a SIGABRT when the next transceive starts?!?
             }
         }
     }
+
+    /*override suspend fun transmitLoop() {
+        val usbRequests = arrayOfNulls<UsbRequest>(NUM_USB_REQUEST)
+        var buffer: ByteBuffer
+        var packet: ByteArray
+
+        try {
+            // Create, initialize and queue all usb requests:
+            for (i in 0 until NUM_USB_REQUEST) {
+                // Get a packet from the queue:
+                packet = queue!!.poll(1000, TimeUnit.MILLISECONDS)
+                if (packet == null || packet.size != getPacketSize()) {
+                    Log.e(LOGTAG, "transmitLoop: Queue empty or wrong packet format. Abort.")
+                    this.stop()
+                    break
+                }
+
+
+                // Wrap the packet in a ByteBuffer object:
+                buffer = ByteBuffer.wrap(packet)
+
+
+                // Initialize the USB Request:
+                usbRequests[i] = UsbRequest()
+                usbRequests[i]!!.initialize(usbConnection, usbEndpointOUT)
+                usbRequests[i]!!.clientData = buffer
+
+
+                // Queue the request
+                if (usbRequests[i]!!.queue(buffer, getPacketSize()) == false) {
+                    Log.e(LOGTAG, "receiveLoop: Couldn't queue USB Request.")
+                    this.stop()
+                    break
+                }
+            }
+
+
+            // Run loop until transceiver mode changes...
+            while (this.transceiverMode == HACKRF_TRANSCEIVER_MODE_TRANSMIT) {
+                // Wait for a request to return. This will block until one of the requests is ready.
+                val request = usbConnection!!.requestWait()
+
+                if (request == null) {
+                    Log.e(LOGTAG, "transmitLoop: Didn't receive USB Request.")
+                    break
+                }
+
+
+                // Make sure we got an UsbRequest for the OUT endpoint!
+                if (request.endpoint !== usbEndpointOUT) continue
+
+                // Increment the packetCounter (for statistics)
+                transceivePacketCounter++
+
+
+                // Extract the buffer and return it to the buffer pool:
+                buffer = request.clientData as ByteBuffer
+                this.returnBufferToBufferPool(buffer.array())
+
+
+                // Get the next packet from the queue:
+                packet = queue!!.poll(1000, TimeUnit.MILLISECONDS)
+                if (packet == null || packet.size != getPacketSize()) {
+                    Log.e(LOGTAG, "transmitLoop: Queue empty or wrong packet format. Stop transmitting.")
+                    break
+                }
+
+
+                // Wrap the packet in a ByteBuffer object:
+                buffer = ByteBuffer.wrap(packet)
+                request.clientData = buffer
+
+
+                // Queue the request again...
+                if (request.queue(buffer, getPacketSize()) == false) {
+                    Log.e(LOGTAG, "transmitLoop: Couldn't queue USB Request.")
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(LOGTAG, "transmitLoop: USB Error!")
+        } catch (e: InterruptedException) {
+            Log.e(LOGTAG, "transmitLoop: Interrup while waiting on queue!")
+        }
+
+
+        // Transmitting is done. Cancel and close all usb requests:
+        for (request in usbRequests) {
+            request?.cancel()
+        }
+
+
+        // If the transceiverMode is still on TRANSMIT, we stop Transmitting:
+        if (this.transceiverMode == HACKRF_TRANSCEIVER_MODE_TRANSMIT) {
+            try {
+                this.stop()
+            } catch (e: Exception) {
+                Log.e(LOGTAG, "transmitLoop: Error while stopping TX!")
+            }
+        }
+    }*/
 
     private fun getPacketSize(): Int {
         // return this.usbEndpointIN.maxPacketSize // <= gives 512 which is way too small
         return packetSize
     }
 
-    private fun getBufferFromBufferPool(): ByteArray {
+    override fun getBufferFromBufferPool(): ByteArray {
         var buffer: ByteArray? = bufferPool?.poll()
 
         // Check if we got a buffer:

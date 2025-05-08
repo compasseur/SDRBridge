@@ -215,7 +215,7 @@ class Airspy
         return this.queue!!
     }
 
-    override suspend fun receiveLoop() {
+    /*override suspend fun receiveLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
         var isRunning = true
 
@@ -287,9 +287,76 @@ class Airspy
                 }
             }
         }
+    }*/
+
+    override suspend fun receiveLoop() {
+        val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
+        var isRunning = true
+
+        try {
+            // Initialize USB requests
+            for (i in 0 until numUsbRequests) {
+                val buffer = ByteBuffer.wrap(getBufferFromBufferPool())
+                usbRequests[i] = UsbRequest().apply {
+                    initialize(usbConnection, usbEndpointIN)
+                    clientData = buffer
+                }
+                if (usbRequests[i]?.queue(buffer) == false) {
+                    throw RfSourceException("Failed to queue initial USB Request")
+                }
+            }
+
+            while (isRunning && this.receiverMode == AIRSPY_RECEIVER_MODE_RECEIVE) {
+                coroutineContext.ensureActive()  // Check if coroutine is still active
+
+                val request = withTimeoutOrNull(1000) {
+                    usbConnection?.requestWait()
+                } ?: continue  // Use timeout instead of blocking indefinitely
+
+                if (request.endpoint != usbEndpointIN) continue
+
+                val buffer = request.clientData as ByteBuffer
+                this.receivePacketCounter++
+
+                // Use a timeout when offering to queue
+                val queueSuccess = withTimeoutOrNull(100) {
+                    queue?.offer(buffer.array())
+                } ?: false
+
+                if (!queueSuccess) {
+                    Log.w(logTag, "Queue is full, dropping packet")
+                    returnBufferToBufferPool(buffer.array())
+                    continue
+                }
+
+                // Prepare next buffer
+                val nextBuffer = ByteBuffer.wrap(getBufferFromBufferPool())
+                request.clientData = nextBuffer
+                if (!request.queue(nextBuffer)) {
+                    Log.e(logTag, "Failed to queue next USB Request")
+                    returnBufferToBufferPool(nextBuffer.array())
+                    isRunning = false
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(logTag, "receiveLoop error: ${e.message}")
+        } finally {
+            // Cleanup
+            usbRequests.forEach { request ->
+                try {
+                    request?.cancel()
+                    (request?.clientData as? ByteBuffer)?.let {
+                        returnBufferToBufferPool(it.array())
+                    }
+                } catch (e: Exception) {
+                    Log.e(logTag, "Error cleaning up USB request: ${e.message}")
+                }
+            }
+            Log.i(logTag, "receiveLoop exited cleanly")
+        }
     }
 
-    private fun getBufferFromBufferPool(): ByteArray {
+    override fun getBufferFromBufferPool(): ByteArray {
         var buffer: ByteArray? = bufferPool?.poll()
 
         // Check if we got a buffer:
@@ -310,15 +377,16 @@ class Airspy
 
     @Throws(RfSourceException::class)
     override fun stop() {
-        receiveJob?.cancel()
-        processJob?.cancel()
-
         // Set mode first to ensure device stops streaming
+        receiverMode = AIRSPY_RECEIVER_MODE_OFF
         try {
-            receiverMode = AIRSPY_RECEIVER_MODE_OFF
+            setReceiverMode(receiverMode)
+            //this.sendUsbRequest(UsbConstants.USB_DIR_IN, AIRSPY_RECEIVER_MODE, 0, 0, null)
         } catch (e: Exception) {
             Log.e(logTag, "Error setting transceiver mode off: ${e.message}")
         }
+        /*receiveJob?.cancel()
+        processJob?.cancel()*/
 
         // Clear queues
         queue?.clear()
@@ -340,6 +408,8 @@ class Airspy
         queue = null
         bufferPool = null
 
+        receiveJob?.cancel()
+        processJob?.cancel()
         receiveJob = null
         processJob = null
     }

@@ -28,5 +28,6 @@ interface RfSource {
         fun setPacking(packingEnable: Boolean): Boolean
         fun setRawMode(rawModeEnable: Boolean): Boolean
         fun setPacketSize(pSize: Int): Boolean
+        fun getBufferFromBufferPool(): ByteArray
 
 }

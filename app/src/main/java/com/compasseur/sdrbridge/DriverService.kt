@@ -24,9 +24,9 @@ import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Arrays
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.coroutineContext
 
 /**
  * Module:      DriverService
@@ -68,6 +68,7 @@ class DriverService : Service() {
     private var samplerate = 20000000 // -s
     private var basebandFilterBandwidth = 1000000 // -b
 
+    private var txVgaGain = 47 // -v
     private var rxVgaGain = 16 // -v
     private var rxLnaGain = 8 // -l
     private var rxMixGain = 8
@@ -78,10 +79,13 @@ class DriverService : Service() {
     private var antennaPowerEnabled = false // -n
     private var packingEnable = false
 
+    private var transmitIsEnabled = false
+
     private var packetSize = 16384 // -ps
 
     private var commandJob: Job? = null
-    private var sampleJob: Job? = null
+    private var receiveJob: Job? = null
+    private var transmitJob: Job? = null
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
 
@@ -96,39 +100,47 @@ class DriverService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = createNotification()
-        LogParameters.appendLine("$logTag, Driver started: $intent \n${intent?.data}\n${RfSourceHolder.rfSource}")
-        startForeground(NOTIFICATION_ID, notification)
+        val action = intent?.action
+        if (action == "ACTION_STOP_DRIVER") {
+                LogParameters.appendLine("$logTag, Received stop action from MainActivity")
+                closeEverything()
+            }
+        else {
+            val notification = createNotification()
+            LogParameters.appendLine("$logTag, Driver started: $intent \n${intent?.data}\n${RfSourceHolder.rfSource}")
+            startForeground(NOTIFICATION_ID, notification)
 
-        rfSource = RfSourceHolder.rfSource
-        intent?.data?.let { uri ->
-            val args = parseUriParameters(uri)
-            address = args["a"]
-            serverPort = args["p"]?.toInt() ?: 1234
-            frequency = args["f"]?.toLong() ?: frequency
-            samplerate = args["s"]?.toInt() ?: samplerate
-            basebandFilterBandwidth = args["b"]?.toInt() ?: basebandFilterBandwidth
-            rxVgaGain = args["v"]?.toInt() ?: rxVgaGain
-            rxLnaGain = args["l"]?.toInt() ?: rxLnaGain
-            ampEnabled = args["m"].toBoolean()
-            antennaPowerEnabled = args["n"].toBoolean()
-            packetSize = args["ps"]?.toInt() ?: packetSize
-            LogParameters.appendLine(
-                "$logTag, Received parameters from intent : " +
-                        "address: $address\n" +
-                        "port: $serverPort\n" +
-                        "frequency: $frequency\n" +
-                        "samplerate: $samplerate\n" +
-                        "packetSize: $packetSize"
-            )
-        }
-        rfSource?.let {
-            LogParameters.appendLine("$logTag, Starting with: $rfSource")
-            startServer()
+            rfSource = RfSourceHolder.rfSource
+            intent?.data?.let { uri ->
+                val args = parseUriParameters(uri)
+                address = args["a"]
+                serverPort = args["p"]?.toInt() ?: 1234
+                frequency = args["f"]?.toLong() ?: frequency
+                samplerate = args["s"]?.toInt() ?: samplerate
+                basebandFilterBandwidth = args["b"]?.toInt() ?: basebandFilterBandwidth
+                rxVgaGain = args["v"]?.toInt() ?: rxVgaGain
+                rxLnaGain = args["l"]?.toInt() ?: rxLnaGain
+                txVgaGain = args["txv"]?.toInt() ?: txVgaGain
+                ampEnabled = args["m"].toBoolean()
+                antennaPowerEnabled = args["n"].toBoolean()
+                packetSize = args["ps"]?.toInt() ?: packetSize
+                transmitIsEnabled = args["tx"].toBoolean()
+                LogParameters.appendLine(
+                    "$logTag, Received parameters from intent : " +
+                            "address: $address\n" +
+                            "port: $serverPort\n" +
+                            "frequency: $frequency\n" +
+                            "samplerate: $samplerate\n" +
+                            "packetSize: $packetSize"
+                )
+            }
+            rfSource?.let {
+                LogParameters.appendLine("$logTag, Starting with: $rfSource")
+                startServer()
+            }
         }
         return START_STICKY // Ensures the service stays running
     }
-
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -197,15 +209,79 @@ class DriverService : Service() {
             inputStream = clientSocket.getInputStream()
             outputStream = clientSocket.getOutputStream()
             driverIsrunning = true
-            commandJob = launch(Dispatchers.IO) { listenForCommands(inputStream) }
-            sampleJob = launch(Dispatchers.IO) { sendIqSamples(outputStream) }
-            // Wait for both coroutines to complete or be cancelled
-            joinAll(commandJob!!, sampleJob!!)
+            if (transmitIsEnabled) {
+                transmitJob = launch(Dispatchers.IO) { receiveIqSamples(inputStream) }
+                transmitJob?.join()
+            } else {
+                commandJob = launch(Dispatchers.IO) { listenForCommands(inputStream) }
+                receiveJob = launch(Dispatchers.IO) { sendIqSamples(outputStream) }
+                // Wait for both coroutines to complete or be cancelled
+                joinAll(commandJob!!, receiveJob!!)
+            }
 
         } catch (e: IOException) {
             LogParameters.appendLine("$logTag, Client disconnected: ${e.message}")
         } finally {
             LogParameters.appendLine("$logTag, Client connection closed")
+            closeEverything()
+        }
+    }
+
+    private suspend fun receiveIqSamples(inputStream: InputStream?) {
+        LogParameters.appendLine("$logTag, ReceiveIqSamples started")
+        var i = 0
+        val basebandFilterWidth = rfSource?.computeBasebandFilterBandwidth(basebandFilterBandwidth) ?: samplerate
+        val queue = rfSource?.startTX()
+        ///////////////////
+        LogParameters.appendLine("$logTag, rfsource: $rfSource")
+        ///////////////////
+        try {
+            rfSource?.apply {
+                setPacketSize(packetSize)
+                LogParameters.appendLine("$logTag, packetSize set")
+                setSampleRate(samplerate, 1)
+                LogParameters.appendLine("$logTag, samplerate set")
+                setFrequency(frequency)
+                LogParameters.appendLine("$logTag, frequency set")
+                setBasebandFilterBandwidth(basebandFilterWidth)
+                LogParameters.appendLine("$logTag, filter BW set")
+                setTxVGAGain(txVgaGain)
+                LogParameters.appendLine("$logTag, TX VGA gain set")
+                setAmp(ampEnabled)
+                LogParameters.appendLine("$logTag, amp set")
+                setAntennaPower(antennaPowerEnabled)
+                LogParameters.appendLine("$logTag, antenna power set")
+            }
+            if (queue == null) {
+                LogParameters.appendLine("$logTag, Error: TX queue is null!")
+                return
+            }
+            while (driverIsrunning) {
+                i++
+                val packet = rfSource?.getBufferFromBufferPool() ?: ByteArray(packetSize)
+                // Read from inputStream into packet buffer
+                val bytesRead = inputStream?.read(packet, 0, packet.size) ?: 0
+                if (bytesRead == -1) {
+                    LogParameters.appendLine("$logTag, InputStream closed by client. Stopping.")
+                    break
+                }
+
+                // If we read fewer bytes than expected, fill the rest with zero
+                if (bytesRead < packet.size) {
+                    Arrays.fill(packet, bytesRead, packet.size, 0.toByte())
+                }
+
+                //val samplePreview = packet.take(32).joinToString(", ") { it.toString() }
+                //LogParameters.appendLine("$logTag, TX Packet preview: $samplePreview")
+
+                // Offer to TX queue
+                if (!queue.offer(packet, 2000, TimeUnit.MILLISECONDS)) {
+                    LogParameters.appendLine("$logTag, TX queue full. Dropping packet.")
+                }
+            }
+        } catch (e: Exception) {
+            LogParameters.appendLine("$logTag, Error receiving samples: ${e.message}")
+        }finally {
             closeEverything()
         }
     }
@@ -247,7 +323,7 @@ class DriverService : Service() {
     private suspend fun sendIqSamples(outputStream: OutputStream?) {
         try {
             LogParameters.appendLine("$logTag, sendIqSamples started")
-            val basebandFilterWidth = rfSource!!.computeBasebandFilterBandwidth(basebandFilterBandwidth)
+            val basebandFilterWidth = rfSource?.computeBasebandFilterBandwidth(basebandFilterBandwidth) ?: samplerate
             var byteReceivedQueue: ArrayBlockingQueue<ByteArray>? = null
             if (rfSource is HackRF) byteReceivedQueue = rfSource?.startRX()
             rfSource?.apply {
@@ -271,9 +347,9 @@ class DriverService : Service() {
                 LogParameters.appendLine("$logTag, LNA AGC set")
                 setRxMixerAGC(agcMixEnable)
                 LogParameters.appendLine("$logTag, Mixer AGC set")
-                setAmp(false)
+                setAmp(ampEnabled)
                 LogParameters.appendLine("$logTag, amp set")
-                setAntennaPower(false)
+                setAntennaPower(antennaPowerEnabled)
                 LogParameters.appendLine("$logTag, antenna power set")
                 //setSampleType(sampleType)
                 setRawMode(true)
@@ -315,6 +391,7 @@ class DriverService : Service() {
                     closeEverything()
                     "Received EXIT command. Closing..."
                 }
+
                 else -> "Unknown command: $command - $value"
             }
             if (command != commandSetFrequency) LogParameters.appendLine("$logTag, $result")
@@ -324,7 +401,7 @@ class DriverService : Service() {
         }
     }
 
-    private fun closeEverything() {
+    /*private fun closeEverything() {
         if (!driverIsrunning) return
         driverIsrunning = false
         LogParameters.appendLine("$logTag, Closing driver service. closeEverything")
@@ -350,9 +427,13 @@ class DriverService : Service() {
             commandJob = null
             LogParameters.appendLine("$logTag, Command job canceled")
 
-            sampleJob?.cancel()
-            sampleJob = null
-            LogParameters.appendLine("$logTag, Sample job canceled")
+            receiveJob?.cancel()
+            receiveJob = null
+            LogParameters.appendLine("$logTag, Receive job canceled")
+
+            transmitJob?.cancel()
+            transmitJob = null
+            LogParameters.appendLine("$logTag, Transmit job canceled")
 
             serviceScope.cancel()
             LogParameters.appendLine("$logTag, Service scope canceled")
@@ -363,6 +444,46 @@ class DriverService : Service() {
         } catch (e: Exception) {
             LogParameters.appendLine("$logTag, Error canceling jobs or service scope: ${e.message}")
         }
+    }*/
+
+    private fun closeEverything() {
+        if (driverIsrunning) {
+            driverIsrunning = false
+            LogParameters.appendLine("$logTag, Closing driver service.")
+            try {
+                rfSource?.stop()
+                rfSource = null
+
+                inputStream?.close()
+                inputStream = null
+
+                outputStream?.close()
+                outputStream = null
+
+                serverSocket?.close()
+                serverSocket = null
+
+                commandJob?.cancel()
+                commandJob = null
+
+                receiveJob?.cancel()
+                receiveJob = null
+
+                transmitJob?.cancel()
+                transmitJob = null
+
+                serviceScope.cancel()
+
+                LogParameters.appendLine("$logTag, Everything closed")
+
+            } catch (e: Exception) {
+                LogParameters.appendLine("$logTag, Error canceling jobs or service scope: ${e.message}")
+            }
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        LogParameters.appendLine("$logTag, Foreground service stopped")
+
     }
 
     override fun onDestroy() {

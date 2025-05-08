@@ -34,7 +34,8 @@ class UsbPermissionManager(
     private val context: Context,
     private val usbManager: UsbManager,
     private val onPermissionGranted: (UsbDevice) -> Unit,
-    private val onPermissionDenied: () -> Unit
+    private val onPermissionDenied: () -> Unit,
+    private val onHackrfDisconnected: ((UsbDevice) -> Unit)? = null
 ) {
     companion object {
         private const val ACTION_USB_PERMISSION = "com.compasseur.USB_PERMISSION"
@@ -42,7 +43,7 @@ class UsbPermissionManager(
 
     private var logTag = "UsbPermissionManagerTag"
 
-    private val usbPermissionReceiver = object : BroadcastReceiver() {
+    /*private val usbPermissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             LogParameters.appendLine("$logTag, PERMISSION: ${intent?.action}")
             if (intent?.action == ACTION_USB_PERMISSION) {
@@ -59,12 +60,53 @@ class UsbPermissionManager(
                 }
             }
         }
+    }*/
+
+    private val usbPermissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val action = intent?.action
+            LogParameters.appendLine("$logTag, BROADCAST: $action")
+
+            when (action) {
+                ACTION_USB_PERMISSION -> {
+                    synchronized(this) {
+                        val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        if (granted && device != null) {
+                            LogParameters.appendLine("$logTag, Permission granted for ${device.productName}")
+                            onPermissionGranted(device)
+                        } else {
+                            LogParameters.appendLine("$logTag, Permission denied for ${device?.productName}")
+                            onPermissionDenied()
+                        }
+                    }
+                }
+
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    if (device != null && isHackRfDevice(device)) {
+                        LogParameters.appendLine("$logTag, HackRF disconnected: ${device.productName}")
+                        onHackrfDisconnected?.invoke(device)
+                    }
+                }
+            }
+        }
     }
 
-    fun registerReceiver() {
+
+    /*fun registerReceiver() {
         val filter = IntentFilter(ACTION_USB_PERMISSION)
         context.registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+    }*/
+
+    fun registerReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(ACTION_USB_PERMISSION)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        context.registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     }
+
 
     fun unregisterReceiver() {
         try {
@@ -90,6 +132,13 @@ class UsbPermissionManager(
             usbManager.requestPermission(device, permissionIntent)
         }
     }
+
+    private fun isHackRfDevice(device: UsbDevice): Boolean {
+        return (device.vendorId == hackRFVendorID && device.productId == hackRFProductID) ||
+                (device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID) ||
+                (device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID)
+    }
+
 
     fun findRfSourceDevice(): UsbDevice? {
         val deviceList = usbManager.deviceList
