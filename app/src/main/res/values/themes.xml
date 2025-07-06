@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<!--<resources>
     <style name="Theme.SDRBridge" parent="Theme.MaterialComponents.DayNight.DarkActionBar"/>
+
+</resources>-->
+
+<resources>
+<style name="Theme.SDRBridge" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <!-- Make system bars transparent -->
+    <item name="android:statusBarColor">@android:color/transparent</item>
+    <item name="android:navigationBarColor">@android:color/transparent</item>
+
+    <!-- Optional: Ensure content doesn't get cut off by keyboard -->
+    <item name="android:windowSoftInputMode">adjustResize</item>
+</style>
 </resources>

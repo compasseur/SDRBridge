@@ -12,6 +12,10 @@ import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -64,8 +68,23 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+            val systemBarsInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(0, systemBarsInsets.top, 0, systemBarsInsets.bottom)
+            insets
+        }
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            isAppearanceLightStatusBars = true  // dark icons if background is light
+            isAppearanceLightNavigationBars = true
+        }
+
+
+
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbPermissionManager = UsbPermissionManager(
@@ -73,7 +92,6 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             usbManager = usbManager,
             onPermissionGranted = { device ->
                 rfSource = when {
-
                     device.vendorId == hackRFVendorID && device.productId == hackRFProductID -> HackRF(usbManager, device, queueSizeHackrf)
                     device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID -> HackRF(usbManager, device, queueSizeHackrf)
                     device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID -> HackRF(usbManager, device, queueSizeHackrf)
@@ -86,15 +104,15 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
                 LogParameters.appendLine("$logTag, Permission granted for $deviceDetecte, starting service with ${device.productName}")
             },
             onPermissionDenied = {
-                Log.w(logTag, "Permission denied for HackRF.")
-                LogParameters.appendLine("$logTag, Permission denied for HackRF.")
+                Log.w(logTag, "Permission denied for SDR device.")
+                LogParameters.appendLine("$logTag, Permission denied for SDR device.")
             },
             onHackrfDisconnected = { device ->
                 val stopIntent = Intent(this, DriverService::class.java).apply {
                     action = "ACTION_STOP_DRIVER"
                 }
                 startService(stopIntent)
-                LogParameters.appendLine("$logTag, HackRF disconnected: ${device.deviceName}")
+                LogParameters.appendLine("$logTag, SDR device disconnected: ${device.deviceName}")
             }
         )
         usbPermissionManager.registerReceiver()

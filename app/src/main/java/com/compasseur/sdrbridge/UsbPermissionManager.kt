@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import androidx.core.content.ContextCompat.getSystemService
+import java.security.Provider
 
 /**
  * Module:      UsbPermissionManager
@@ -42,25 +44,7 @@ class UsbPermissionManager(
     }
 
     private var logTag = "UsbPermissionManagerTag"
-
-    /*private val usbPermissionReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            LogParameters.appendLine("$logTag, PERMISSION: ${intent?.action}")
-            if (intent?.action == ACTION_USB_PERMISSION) {
-                synchronized(this) {
-                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    if (granted && device != null) {
-                        LogParameters.appendLine("$logTag, Permission granted for ${device.productName}")
-                        onPermissionGranted(device) // Call the callback if permission granted
-                    } else {
-                        LogParameters.appendLine("$logTag, Permission denied for ${device?.productName}")
-                        onPermissionDenied()
-                    }
-                }
-            }
-        }
-    }*/
+    private var isReceiverRegistered = false
 
     private val usbPermissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -84,35 +68,48 @@ class UsbPermissionManager(
 
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                    if (device != null && isHackRfDevice(device)) {
-                        LogParameters.appendLine("$logTag, HackRF disconnected: ${device.productName}")
+                    if (device != null && isCompatibleSdrDevice(device)) {
+                        LogParameters.appendLine("$logTag, Device disconnected: ${device.productName}")
                         onHackrfDisconnected?.invoke(device)
+                    }
+                }
+
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    if (device != null) {
+                        LogParameters.appendLine("$logTag, Device connected: ${device.productName} - VID: ${device.vendorId} - PID: ${device.productId}")
+                        if (isCompatibleSdrDevice(device)) {
+                            LogParameters.appendLine("$logTag, Compatible SDR device attached: ${device.productName}")
+                            //checkUsbPermission(device)
+                        } else {
+                            LogParameters.appendLine("$logTag, Incompatible USB device attached: ${device.productName}")
+                        }
                     }
                 }
             }
         }
     }
 
-
-    /*fun registerReceiver() {
-        val filter = IntentFilter(ACTION_USB_PERMISSION)
-        context.registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-    }*/
-
     fun registerReceiver() {
-        val filter = IntentFilter().apply {
-            addAction(ACTION_USB_PERMISSION)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        if (!isReceiverRegistered) {
+            val filter = IntentFilter().apply {
+                addAction(ACTION_USB_PERMISSION)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            }
+            context.registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            isReceiverRegistered = true
         }
-        context.registerReceiver(usbPermissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
     }
 
-
     fun unregisterReceiver() {
-        try {
-            context.unregisterReceiver(usbPermissionReceiver)
-        } catch (e: IllegalArgumentException) {
-            LogParameters.appendLine("$logTag, Receiver was not registered or already unregistered.")
+        if (isReceiverRegistered) {
+            try {
+                context.unregisterReceiver(usbPermissionReceiver)
+            } catch (e: IllegalArgumentException) {
+                LogParameters.appendLine("$logTag, Receiver was not registered or already unregistered.")
+            }
+            isReceiverRegistered = false
         }
     }
 
@@ -133,23 +130,46 @@ class UsbPermissionManager(
         }
     }
 
-    private fun isHackRfDevice(device: UsbDevice): Boolean {
+    private fun isCompatibleSdrDevice(device: UsbDevice): Boolean {
         return (device.vendorId == hackRFVendorID && device.productId == hackRFProductID) ||
                 (device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID) ||
-                (device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID)
+                (device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID) ||
+                (device.vendorId == airspyMiniVendorID && device.productId == airspyMiniProductID)
     }
-
 
     fun findRfSourceDevice(): UsbDevice? {
         val deviceList = usbManager.deviceList
-        val foundDevice = deviceList.values.firstOrNull {
-            (it.vendorId == hackRFVendorID && it.productId == hackRFProductID) ||
-            (it.vendorId == hackRFJawbreakerVendorID && it.productId == hackRFJawbreakerProductID) ||
-            (it.vendorId == hackRFRad1oVendorID && it.productId == hackRFRad1oProductID) ||
-            (it.vendorId == airspyMiniVendorID && it.productId == airspyMiniProductID)
+
+        if (deviceList.isEmpty()) {
+            LogParameters.appendLine("$logTag, No USB devices found.")
         }
-        LogParameters.appendLine("$logTag, Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId} - ${foundDevice?.version}")
+        var foundDevice: UsbDevice? = null
+        for (device in deviceList.values) {
+            val vendorId = device.vendorId
+            val productId = device.productId
+            val productName = device.productName ?: "Unknown"
+
+            LogParameters.appendLine(
+                "$logTag, Detected USB Device: $productName | VID: $vendorId | PID: $productId"
+            )
+            LogParameters.appendLine(
+                "$logTag, Class: ${device.deviceClass} | Subclass: ${device.deviceSubclass} | Protocol: ${device.deviceProtocol}"
+            )
+
+            if ((vendorId == hackRFVendorID && productId == hackRFProductID) ||
+                (vendorId == hackRFJawbreakerVendorID && productId == hackRFJawbreakerProductID) ||
+                (vendorId == hackRFRad1oVendorID && productId == hackRFRad1oProductID) ||
+                (vendorId == airspyMiniVendorID && productId == airspyMiniProductID)
+            ) {
+                foundDevice = device
+                LogParameters.appendLine("$logTag, Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId} - ${foundDevice?.version}")
+            }
+        }
+
         return foundDevice
     }
 }
+
+
+
 

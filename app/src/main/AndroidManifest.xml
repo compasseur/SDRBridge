@@ -41,6 +41,6 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
         </service>
-    </application>
 
+    </application>
 </manifest>

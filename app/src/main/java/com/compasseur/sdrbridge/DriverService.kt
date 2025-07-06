@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.hardware.usb.UsbManager
 import android.net.Uri
@@ -108,7 +109,12 @@ class DriverService : Service() {
         else {
             val notification = createNotification()
             LogParameters.appendLine("$logTag, Driver started: $intent \n${intent?.data}\n${RfSourceHolder.rfSource}")
-            startForeground(NOTIFICATION_ID, notification)
+            //startForeground(NOTIFICATION_ID, notification)
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
 
             rfSource = RfSourceHolder.rfSource
             intent?.data?.let { uri ->
@@ -271,9 +277,6 @@ class DriverService : Service() {
                     Arrays.fill(packet, bytesRead, packet.size, 0.toByte())
                 }
 
-                //val samplePreview = packet.take(32).joinToString(", ") { it.toString() }
-                //LogParameters.appendLine("$logTag, TX Packet preview: $samplePreview")
-
                 // Offer to TX queue
                 if (!queue.offer(packet, 2000, TimeUnit.MILLISECONDS)) {
                     LogParameters.appendLine("$logTag, TX queue full. Dropping packet.")
@@ -401,51 +404,6 @@ class DriverService : Service() {
         }
     }
 
-    /*private fun closeEverything() {
-        if (!driverIsrunning) return
-        driverIsrunning = false
-        LogParameters.appendLine("$logTag, Closing driver service. closeEverything")
-        try {
-
-            rfSource?.stop()
-            rfSource = null
-            LogParameters.appendLine("$logTag, RF source stopped")
-
-            inputStream?.close()
-            inputStream = null
-            LogParameters.appendLine("$logTag, Input stream closed")
-
-            outputStream?.close()
-            outputStream = null
-            LogParameters.appendLine("$logTag, Output stream closed")
-
-            serverSocket?.close()
-            serverSocket = null
-            LogParameters.appendLine("$logTag, Server socket closed")
-
-            commandJob?.cancel()
-            commandJob = null
-            LogParameters.appendLine("$logTag, Command job canceled")
-
-            receiveJob?.cancel()
-            receiveJob = null
-            LogParameters.appendLine("$logTag, Receive job canceled")
-
-            transmitJob?.cancel()
-            transmitJob = null
-            LogParameters.appendLine("$logTag, Transmit job canceled")
-
-            serviceScope.cancel()
-            LogParameters.appendLine("$logTag, Service scope canceled")
-
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            LogParameters.appendLine("$logTag, Foreground service stopped")
-        } catch (e: Exception) {
-            LogParameters.appendLine("$logTag, Error canceling jobs or service scope: ${e.message}")
-        }
-    }*/
-
     private fun closeEverything() {
         if (driverIsrunning) {
             driverIsrunning = false
@@ -476,14 +434,14 @@ class DriverService : Service() {
 
                 LogParameters.appendLine("$logTag, Everything closed")
 
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                LogParameters.appendLine("$logTag, Foreground service stopped")
+
             } catch (e: Exception) {
                 LogParameters.appendLine("$logTag, Error canceling jobs or service scope: ${e.message}")
             }
         }
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-        LogParameters.appendLine("$logTag, Foreground service stopped")
-
     }
 
     override fun onDestroy() {
