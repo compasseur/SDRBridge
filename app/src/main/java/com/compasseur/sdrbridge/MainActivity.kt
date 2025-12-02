@@ -3,6 +3,7 @@ package com.compasseur.sdrbridge
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Bundle
@@ -12,6 +13,7 @@ import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.view.ContextThemeWrapper
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -69,7 +71,6 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
-
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -78,27 +79,25 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             view.setPadding(0, systemBarsInsets.top, 0, systemBarsInsets.bottom)
             insets
         }
+        val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        val isDarkTheme = (nightMode == Configuration.UI_MODE_NIGHT_YES)
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = true  // dark icons if background is light
-            isAppearanceLightNavigationBars = true
+            isAppearanceLightStatusBars = !isDarkTheme       // light icons if dark theme
+            isAppearanceLightNavigationBars = !isDarkTheme
         }
-
-
-
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbPermissionManager = UsbPermissionManager(
             context = this,
             usbManager = usbManager,
             onPermissionGranted = { device ->
-                rfSource = when {
-                    device.vendorId == hackRFVendorID && device.productId == hackRFProductID -> HackRF(usbManager, device, queueSizeHackrf)
-                    device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID -> HackRF(usbManager, device, queueSizeHackrf)
-                    device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID -> HackRF(usbManager, device, queueSizeHackrf)
-                    device.vendorId == airspyMiniVendorID && device.productId == airspyMiniProductID -> Airspy(usbManager, device, queueSizeAirspy)
-                    else -> null //HackRF(usbManager, device, 200000000 * 2)
+                rfSource = when (device.vendorId) {
+                    hackRFVendorID if device.productId == hackRFProductID -> HackRF(usbManager, device, queueSizeHackrf)
+                    hackRFJawbreakerVendorID if device.productId == hackRFJawbreakerProductID -> HackRF(usbManager, device, queueSizeHackrf)
+                    hackRFRad1oVendorID if device.productId == hackRFRad1oProductID -> HackRF(usbManager, device, queueSizeHackrf)
+                    airspyMiniVendorID if device.productId == airspyMiniProductID -> Airspy(usbManager, device, queueSizeAirspy)
+                    else -> null
                 }
-                //rfSource?.initializeRfSource(this, this, device, usbManager, 200000000 * 2)
                 rfSource?.initializeRfSource(this, this, device, usbManager, queueSizeHackrf)
                 val deviceDetecte = if (rfSource is HackRF) "HackRF" else if (rfSource is Airspy) "Airspy" else "Nothing"
                 LogParameters.appendLine("$logTag, Permission granted for $deviceDetecte, starting service with ${device.productName}")
@@ -198,6 +197,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
 
     private fun showAbout() {
         val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "Compasseur", "Privacy policy")
+
         AlertDialog.Builder(this).apply {
             setTitle("About " + getString(R.string.version_number))
             setItems(listOfChoices) { dialogInterface, i ->

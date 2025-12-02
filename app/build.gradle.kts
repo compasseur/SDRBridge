@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.compasseur.sdrbridge"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.compasseur.sdrbridge"
         minSdk = 29
-        targetSdk = 35
-        versionCode = 8
-        versionName = "1.16"
+        targetSdk = 36
+        versionCode = 9
+        versionName = "1.17"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -58,8 +58,6 @@ dependencies {
     implementation (libs.kotlinx.coroutines.core)
 
     implementation (libs.material)
-
-    implementation (libs.kotlinx.coroutines.core)
 
     implementation (libs.kotlinx.coroutines.android)
     implementation (libs.kotlin.stdlib.jdk7)

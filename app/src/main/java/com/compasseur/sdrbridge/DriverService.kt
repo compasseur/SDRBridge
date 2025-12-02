@@ -109,7 +109,6 @@ class DriverService : Service() {
         else {
             val notification = createNotification()
             LogParameters.appendLine("$logTag, Driver started: $intent \n${intent?.data}\n${RfSourceHolder.rfSource}")
-            //startForeground(NOTIFICATION_ID, notification)
             startForeground(
                 NOTIFICATION_ID,
                 notification,

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import androidx.core.content.ContextCompat.getSystemService
 import java.security.Provider
 
@@ -54,7 +55,14 @@ class UsbPermissionManager(
             when (action) {
                 ACTION_USB_PERMISSION -> {
                     synchronized(this) {
-                        val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        //val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                        val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                        }
+
                         val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                         if (granted && device != null) {
                             LogParameters.appendLine("$logTag, Permission granted for ${device.productName}")
@@ -67,7 +75,13 @@ class UsbPermissionManager(
                 }
 
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    //val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    val device: UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
                     if (device != null && isCompatibleSdrDevice(device)) {
                         LogParameters.appendLine("$logTag, Device disconnected: ${device.productName}")
                         onHackrfDisconnected?.invoke(device)
@@ -114,9 +128,10 @@ class UsbPermissionManager(
     }
 
     fun checkUsbPermission(device: UsbDevice) {
-        if (!usbPermissionReceiver.isOrderedBroadcast) {
+        /*if (!usbPermissionReceiver.isOrderedBroadcast) {
             registerReceiver()
-        }
+        }*/
+        registerReceiver()
         if (usbManager.hasPermission(device)) {
             LogParameters.appendLine("$logTag, Already has permission for ${device.productName}")
             onPermissionGranted(device)
@@ -126,6 +141,7 @@ class UsbPermissionManager(
                 context, 0, Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             )
+
             usbManager.requestPermission(device, permissionIntent)
         }
     }

@@ -16,6 +16,7 @@
             android:id="@+id/btn_clear_log"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:backgroundTint="@color/color_3"
             android:text="CLEAR LOG" />
 
         <TextView
@@ -34,6 +35,7 @@
             android:id="@+id/btn_about"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:backgroundTint="@color/color_3"
             android:text="ABOUT" />
 
     </LinearLayout>
