@@ -8,6 +8,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.hardware.usb.UsbRequest
+import android.os.SystemClock
 import android.util.Log
 import com.compasseur.sdrbridge.LogParameters
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -97,6 +99,17 @@ class Airspy
 
     private var packetSize = 1024 * 16 // Buffer Size of each UsbRequest (can be customized through a command from client app)
 
+    @Volatile
+    private var dropSamplesUntil = 0L // uptime (ms) until which received samples are dropped, see setFrequency()
+    // Increased at the start of each retune, after dropSamplesUntil: a USB request
+    // accepted before a retune and queued after it is dropped (receiveLoop)
+    @Volatile
+    private var retuneCount = 0L
+    // USB requests still dropped after a retune, see endDrop()
+    private val requestsToSkip = AtomicInteger(0)
+    // Queuing a packet and emptying the queue at the end of a retune don't overlap
+    private val queueLock = Any()
+
     companion object {
         // Sample types:
         const val AIRSPY_SAMPLE_FLOAT32_IQ: Int = 0 // 2 * 32bit float per sample
@@ -136,6 +149,11 @@ class Airspy
 
         private const val logTag: String = "airspy_android"
         private const val numUsbRequests: Int = 4 //16 // Number of parallel UsbRequests
+
+        // Samples dropped for this long after a retune: the samples recorded before it that
+        // are still on their way (Airspy buffer, USB requests) and the tuner settling.
+
+        private const val retuneDropMillis: Long = 5
     }
 
     init {
@@ -143,20 +161,20 @@ class Airspy
             // Extract interface from the device:
             this.usbInterface = usbDevice.getInterface(0)
 
-            // For detailed trouble shooting: Read out interface information of the device:
-            Log.i(
+            // Read out interface information of the device:
+            /*Log.i(
                 logTag, "constructor: [interface 0] interface protocol: " + usbInterface!!.interfaceProtocol
                         + " subclass: " + usbInterface!!.interfaceSubclass
             )
             Log.i(logTag, "constructor: [interface 0] interface class: " + usbInterface!!.interfaceClass)
-            Log.i(logTag, "constructor: [interface 0] endpoint count: " + usbInterface!!.endpointCount)
+            Log.i(logTag, "constructor: [interface 0] endpoint count: " + usbInterface!!.endpointCount)*/
 
             // Extract the endpoint from the device:
             this.usbEndpointIN = usbInterface!!.getEndpoint(0)
             this.usbEndpointOUT = usbInterface!!.getEndpoint(1)
 
-            // For detailed trouble shooting: Read out endpoint information of the interface:
-            Log.i(
+            // Read out endpoint information of the interface:
+            /*Log.i(
                 logTag, "constructor:     [endpoint 0 (IN)] address: " + usbEndpointIN!!.address
                         + " attributes: " + usbEndpointIN!!.attributes + " direction: " + usbEndpointIN!!.direction
                         + " max_packet_size: " + usbEndpointIN!!.maxPacketSize
@@ -165,7 +183,7 @@ class Airspy
                 logTag, "constructor:     [endpoint 1 (OUT)] address: " + usbEndpointOUT!!.address
                         + " attributes: " + usbEndpointOUT!!.attributes + " direction: " + usbEndpointOUT!!.direction
                         + " max_packet_size: " + usbEndpointOUT!!.maxPacketSize
-            )
+            )*/
 
             // Open the device:
             this.usbConnection = usbManager.openDevice(usbDevice)
@@ -215,80 +233,6 @@ class Airspy
         return this.queue!!
     }
 
-    /*override suspend fun receiveLoop() {
-        val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
-        var isRunning = true
-
-        try {
-            // Initialize USB requests
-            for (i in 0 until numUsbRequests) {
-                val buffer = ByteBuffer.wrap(getBufferFromBufferPool())
-                usbRequests[i] = UsbRequest().apply {
-                    initialize(usbConnection, usbEndpointIN)
-                    clientData = buffer
-                }
-                if (usbRequests[i]?.queue(buffer) == false) {
-                    throw RfSourceException("Failed to queue initial USB Request")
-                }
-            }
-
-            while (isRunning && this.receiverMode == AIRSPY_RECEIVER_MODE_RECEIVE) {
-                coroutineContext.ensureActive()  // Check if coroutine is still active
-
-                val request = withTimeoutOrNull(1000) {
-                    usbConnection?.requestWait()
-                } ?: continue  // Use timeout instead of blocking indefinitely
-
-                if (request.endpoint != usbEndpointIN) continue
-
-                val buffer = request.clientData as ByteBuffer
-                this.receivePacketCounter++
-
-                // Use a timeout when offering to queue
-                val queueSuccess = withTimeoutOrNull(100) {
-                    queue?.offer(buffer.array())
-                } ?: false
-
-                if (!queueSuccess) {
-                    Log.w(logTag, "Queue is full, dropping packet")
-                    returnBufferToBufferPool(buffer.array())
-                    continue
-                }
-
-                // Prepare next buffer
-                val nextBuffer = ByteBuffer.wrap(getBufferFromBufferPool())
-                request.clientData = nextBuffer
-                if (!request.queue(nextBuffer)) {
-                    isRunning = false
-                    Log.e(logTag, "Failed to queue next USB Request")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(logTag, "receiveLoop error: ${e.message}")
-        } finally {
-            // Cleanup
-            usbRequests.forEach { request ->
-                try {
-                    request?.cancel()
-                    (request?.clientData as? ByteBuffer)?.let {
-                        returnBufferToBufferPool(it.array())
-                    }
-                } catch (e: Exception) {
-                    Log.e(logTag, "Error cleaning up USB request: ${e.message}")
-                }
-            }
-
-            // If the receiver mode is still on RECEIVE, stop receiving
-            if (this.receiverMode == AIRSPY_RECEIVER_MODE_RECEIVE) {
-                try {
-                    this.stop()
-                } catch (e: RfSourceException) {
-                    Log.e(logTag, "receiveLoop: Error while stopping RX!")
-                }
-            }
-        }
-    }*/
-
     override suspend fun receiveLoop() {
         val usbRequests = arrayOfNulls<UsbRequest>(numUsbRequests)
         var isRunning = true
@@ -318,14 +262,45 @@ class Airspy
                 val buffer = request.clientData as ByteBuffer
                 this.receivePacketCounter++
 
-                // Use a timeout when offering to queue
-                val queueSuccess = withTimeoutOrNull(100) {
-                    queue?.offer(buffer.array())
-                } ?: false
+                // Read before dropSamplesUntil (see startDrop())
+                val retune = retuneCount
+                // Every request completed after a retune counts, also the ones dropped by time
+                val skipped = requestsToSkip.get() > 0 && requestsToSkip.getAndDecrement() > 0
+                // Recorded while retuning or settling (see setFrequency()): dropped, and the
+                // request is queued again with the same buffer
+                if (skipped || SystemClock.uptimeMillis() < dropSamplesUntil) {
+                    buffer.clear()
+                    if (!request.queue(buffer)) {
+                        Log.e(logTag, "Failed to queue USB Request")
+                        isRunning = false
+                    }
+                    continue
+                }
+
+                // null: a retune started since this request was accepted, its samples are of
+                // the previous frequency and would reach the client after the retune
+                val queueSuccess = synchronized(queueLock) {
+                    if (retuneCount != retune) null else queue?.offer(buffer.array()) ?: false
+                }
+
+                if (queueSuccess == null) {
+                    buffer.clear()
+                    if (!request.queue(buffer)) {
+                        Log.e(logTag, "Failed to queue USB Request")
+                        isRunning = false
+                    }
+                    continue
+                }
 
                 if (!queueSuccess) {
+                    // Queue the request again with the same buffer: without that, each full
+                    // queue lost one of the numUsbRequests requests and the stream stopped
                     Log.w(logTag, "Queue is full, dropping packet")
-                    returnBufferToBufferPool(buffer.array())
+                    buffer.clear()
+                    if (!request.queue(buffer)) {
+                        Log.e(logTag, "Failed to queue USB Request")
+                        isRunning = false
+                    }
                     continue
                 }
 
@@ -341,7 +316,7 @@ class Airspy
         } catch (e: Exception) {
             Log.e(logTag, "receiveLoop error: ${e.message}")
         } finally {
-            // Cleanup
+            // Cleaning
             usbRequests.forEach { request ->
                 try {
                     request?.cancel()
@@ -359,7 +334,7 @@ class Airspy
     override fun getBufferFromBufferPool(): ByteArray {
         var buffer: ByteArray? = bufferPool?.poll()
 
-        // Check if we got a buffer:
+        // Check if there is a buffer:
         if (buffer == null) {
             buffer = ByteArray(getUsbPacketSize())
         }
@@ -385,8 +360,6 @@ class Airspy
         } catch (e: Exception) {
             Log.e(logTag, "Error setting transceiver mode off: ${e.message}")
         }
-        /*receiveJob?.cancel()
-        processJob?.cancel()*/
 
         // Clear queues
         queue?.clear()
@@ -510,7 +483,6 @@ class Airspy
         val len = buffer?.size ?: 0
         val connection = usbConnection ?: throw RfSourceException("USB connection is null!")
 
-        // Don't claim/release for every request - do it once during initialization
         try {
             // Send request
             return connection.controlTransfer(
@@ -520,7 +492,7 @@ class Airspy
                 index,
                 buffer,
                 len,
-                1000  // Add a reasonable timeout
+                1000  // Add some timeout
             )
         } catch (e: Exception) {
             Log.e(logTag, "USB transfer failed: ${e.message}")
@@ -762,16 +734,60 @@ class Airspy
     }
 
     @Throws(RfSourceException::class)
-    override fun setFrequency(frequency: Long): Boolean {
+    /*Retunes and makes sure the client app only gets samples of the new frequency: the
+    samples recorded while retuning and for retuneDropMillis after are dropped (receiveLoop),
+    and the packets of the previous frequency still waiting in the queue. The retune code,
+    queued before the drop ends, tells the client where the new frequency starts .*/
+    override fun setFrequency(frequency: Long, retuneCode: ByteArray?): Boolean {
         val freq = intToByteArray(frequency.toInt()) //longToByteArray(frequency)
 
         Log.d(logTag, "Tune Airspy to " + frequency + "Hz...")
 
-        if (this.sendUsbRequest(UsbConstants.USB_DIR_OUT, AIRSPY_SET_FREQ, 0, 0, freq) != 4) {
-            Log.e(logTag, "setFrequency: USB Transfer failed!")
-            throw (RfSourceException("USB Transfer failed!"))
+        var tuned = false
+        startDrop()
+        try {
+            if (this.sendUsbRequest(UsbConstants.USB_DIR_OUT, AIRSPY_SET_FREQ, 0, 0, freq) != 4) {
+                Log.e(logTag, "setFrequency: USB Transfer failed!")
+                throw (RfSourceException("USB Transfer failed!"))
+            }
+            tuned = true
+        } finally {
+            // Nothing is queued until endDrop(): the retune code comes right before the new samples
+            dropQueuedSamples(if (tuned) retuneCode else null)
+            endDrop()
         }
         return true
+    }
+
+    //Empties the queue (a retune code still waiting there is dropped too: the client waits for
+    //the code of its latest frequency command), then queues retuneCode
+    private fun dropQueuedSamples(retuneCode: ByteArray? = null) {
+        synchronized(queueLock) {
+            while (true) {
+                val packet = queue?.poll() ?: break
+                if (packet.size == packetSize) returnBufferToBufferPool(packet)
+            }
+            retuneCode?.let { queue?.offer(it) }
+        }
+    }
+
+    //Start of a retune: the samples are dropped from now on (receiveLoop). retuneCount is
+    //increased after dropSamplesUntil, so that a request that read the old retuneCount is
+    //either dropped by dropSamplesUntil or by the retuneCount check before queuing.
+    //The queued packets (previous frequency) are dropped now too.
+    private fun startDrop() {
+        dropSamplesUntil = Long.MAX_VALUE
+        retuneCount++
+        dropQueuedSamples()
+    }
+
+    //End of a retune: the samples are still dropped for retuneDropMillis, and until the
+    //numUsbRequests in flight were handed over, whichever comes last: they may all have
+    //been filled during the retune, and a slow device  can hand them over late, in a
+    //burst. requestsToSkip is set before dropSamplesUntil, so no request gets between them.
+    private fun endDrop() {
+        requestsToSkip.set(numUsbRequests)
+        dropSamplesUntil = SystemClock.uptimeMillis() + retuneDropMillis
     }
 
     @Throws(RfSourceException::class)

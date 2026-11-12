@@ -1,7 +1,9 @@
 package com.compasseur.sdrbridge
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
@@ -43,6 +45,17 @@ class IntentHandlerActivity : AppCompatActivity() {
                 val receivedData: Uri? = receivedIntent.data
 
                 LogParameters.appendLine("$logTag, Received: $receivedData")
+
+                // No supported SDR plugged in: answer 0
+                val usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+                val device = UsbPermissionManager(this, usbManager, onPermissionGranted = {}, onPermissionDenied = {})
+                    .findRfSourceDevice()
+                if (device == null) {
+                    LogParameters.appendLine("$logTag, No SDR device plugged in")
+                    setResult(0, Intent().putExtra("message", "No SDR device found"))
+                    finish()
+                    return
+                }
 
                 val resultIntent = Intent().apply {
                     putExtra("message", "HackRF Initialized")

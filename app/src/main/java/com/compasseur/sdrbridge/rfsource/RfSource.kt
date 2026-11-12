@@ -14,7 +14,9 @@ interface RfSource {
         fun stop()
         suspend fun receiveLoop()
         suspend fun transmitLoop()
-        fun setFrequency(frequency: Long): Boolean
+        //retuneCode (see DriverService.retuneCode()), if any, is queued right after the samples
+        //of the previous frequency were dropped, before any sample of the new frequency
+        fun setFrequency(frequency: Long, retuneCode: ByteArray? = null): Boolean
         fun computeBasebandFilterBandwidth(sampRate: Int): Int
         fun setBasebandFilterBandwidth(bandwidth: Int): Boolean
         fun setRxVGAGain(gain: Int): Boolean
@@ -29,5 +31,18 @@ interface RfSource {
         fun setRawMode(rawModeEnable: Boolean): Boolean
         fun setPacketSize(pSize: Int): Boolean
         fun getBufferFromBufferPool(): ByteArray
+
+        //RTL-SDR (rtl_tcp) specific commands. Other sources don't support them.
+        fun setTunerGainMode(manual: Boolean): Boolean = false
+        fun setTunerGain(gain: Int): Boolean = false // tenths of dB
+        fun setTunerGainByIndex(index: Int): Boolean = false
+        fun setTunerGainByPercentage(percent: Int): Boolean = false
+        fun setTunerIfGain(stage: Int, gain: Int): Boolean = false
+        fun setFreqCorrection(ppm: Int): Boolean = false
+        fun setAgcMode(enable: Boolean): Boolean = false
+        fun setDirectSampling(mode: Int): Boolean = false
+        fun setOffsetTuning(enable: Boolean): Boolean = false
+        fun setTestMode(enable: Boolean): Boolean = false
+        fun setXtalFreq(rtlFreq: Int, tunerFreq: Int): Boolean = false
 
 }

@@ -17,7 +17,9 @@ import com.compasseur.sdrbridge.rfsource.HackRF
 import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder
 import com.compasseur.sdrbridge.rfsource.Airspy
+import com.compasseur.sdrbridge.rfsource.RtlSdr
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -27,7 +29,10 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.Arrays
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import java.nio.ByteBuffer
 
 /**
  * Module:      DriverService
@@ -75,6 +80,8 @@ class DriverService : Service() {
     private var rxMixGain = 8
     private var agcLnaEnable = false
     private var agcMixEnable = false
+    private var rtlTunerGain = 0 // -g RTL-SDR tuner gain in tenths of dB, 0 = automatic
+    private var rtlPpm = 0 // -ppm RTL-SDR frequency correction
 
     private var ampEnabled = false // -m
     private var antennaPowerEnabled = false // -n
@@ -85,7 +92,21 @@ class DriverService : Service() {
     private var packetSize = 16384 // -ps
 
     private var commandJob: Job? = null
+    private var applyCommandsJob: Job? = null
     private var receiveJob: Job? = null
+
+    /*Commands received from the client app, waiting to be applied by applyCommands().
+    Only the latest frequency is kept: when the client retunes faster than the SDR
+    can, the intermediate frequencies are skipped instead of accumulating. Kept with the
+    number of its frequency command, for its retune code (see retuneCode())*/
+    private val pendingFrequency = AtomicReference<Pair<Long, Int>?>(null)
+    private val pendingCommands = ConcurrentLinkedQueue<Pair<Int, Long>>()
+    private val commandsAvailable = Channel<Unit>(Channel.CONFLATED)
+    //Set by commandEnableRetuneCodes, see retuneCode()
+    @Volatile private var retuneCodesEnabled = false
+    private var frequencyCommandsReceived = 0
+    //Completed by sendIqSamples() once the SDR is set up and receiving, see applyCommands()
+    private var receiveStarted = CompletableDeferred<Unit>()
     private var transmitJob: Job? = null
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
@@ -109,11 +130,7 @@ class DriverService : Service() {
         else {
             val notification = createNotification()
             LogParameters.appendLine("$logTag, Driver started: $intent \n${intent?.data}\n${RfSourceHolder.rfSource}")
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            )
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
 
             rfSource = RfSourceHolder.rfSource
             intent?.data?.let { uri ->
@@ -130,6 +147,8 @@ class DriverService : Service() {
                 antennaPowerEnabled = args["n"].toBoolean()
                 packetSize = args["ps"]?.toInt() ?: packetSize
                 transmitIsEnabled = args["tx"].toBoolean()
+                rtlTunerGain = args["g"]?.toInt() ?: rtlTunerGain
+                rtlPpm = args["ppm"]?.toInt() ?: rtlPpm
                 LogParameters.appendLine(
                     "$logTag, Received parameters from intent : " +
                             "address: $address\n" +
@@ -180,8 +199,7 @@ class DriverService : Service() {
         return params
     }
 
-    //Starts the server with the address and port. Wait for the client to connect
-    //and then handleClientConnection
+    //Starts the server with the address and port. Wait for the client to connect and then handleClientConnection
     private fun startServer() {
         serviceScope.launch {
             try {
@@ -208,9 +226,14 @@ class DriverService : Service() {
 
     //Establishs the input and output streams and launchs the coroutines responsible
     //for sending the IQ samples to the outputStream and receiving commands from the
-    //client app through the inputStream
+    //client app through the inputStream. When used as a transmitter, the HackRF receives
+    //the samples through the inputstream and can not receive commands at the same time.
     private suspend fun handleClientConnection(clientSocket: Socket) = withContext(Dispatchers.IO) {
         try {
+            clientSocket.tcpNoDelay = true
+            retuneCodesEnabled = false
+            frequencyCommandsReceived = 0
+            receiveStarted = CompletableDeferred()
             inputStream = clientSocket.getInputStream()
             outputStream = clientSocket.getOutputStream()
             driverIsrunning = true
@@ -219,6 +242,7 @@ class DriverService : Service() {
                 transmitJob?.join()
             } else {
                 commandJob = launch(Dispatchers.IO) { listenForCommands(inputStream) }
+                applyCommandsJob = launch(Dispatchers.IO) { applyCommands() }
                 receiveJob = launch(Dispatchers.IO) { sendIqSamples(outputStream) }
                 // Wait for both coroutines to complete or be cancelled
                 joinAll(commandJob!!, receiveJob!!)
@@ -264,7 +288,6 @@ class DriverService : Service() {
             while (driverIsrunning) {
                 i++
                 val packet = rfSource?.getBufferFromBufferPool() ?: ByteArray(packetSize)
-                // Read from inputStream into packet buffer
                 val bytesRead = inputStream?.read(packet, 0, packet.size) ?: 0
                 if (bytesRead == -1) {
                     LogParameters.appendLine("$logTag, InputStream closed by client. Stopping.")
@@ -288,7 +311,8 @@ class DriverService : Service() {
         }
     }
 
-    //Listens for commands from the client app and converts them before handling them
+    //Listens for commands from the client app and converts them before handing them to
+    //applyCommands(). Reading never waits for a command to be applied
     private suspend fun listenForCommands(inputStream: InputStream?) {
         LogParameters.appendLine("$logTag, listenForCommands started")
         val commandBuffer = ByteArray(5)
@@ -309,7 +333,13 @@ class DriverService : Service() {
                         (commandBuffer[2].toUByte().toLong() shl 16) or
                         (commandBuffer[3].toUByte().toLong() shl 8) or
                         (commandBuffer[4].toUByte().toLong()))
-                handleCommand(command, value)
+                if (command == commandSetFrequency) {
+                    frequencyCommandsReceived++
+                    pendingFrequency.set(value to frequencyCommandsReceived)
+                } else {
+                    pendingCommands.add(command to value)
+                }
+                commandsAvailable.trySend(Unit)
             }
         } catch (e: Exception) {
             LogParameters.appendLine("$logTag, Error receiving command: ${e.message}")
@@ -319,7 +349,23 @@ class DriverService : Service() {
         }
     }
 
-    //Starts the HackRF in receive mode and gets the IQ samples before offering them to the
+    //Applies the commands received by listenForCommands(), one at a time: first the other
+    //commands in the order they were received, then only the latest frequency. Not before
+    //the SDR is set up and receiving: its setup frequency would replace the client's, and
+    //starting to receive empties the queue, retune code included
+    private suspend fun applyCommands() {
+        receiveStarted.await()
+        for (signal in commandsAvailable) {
+            while (true) {
+                val (command, value) = pendingCommands.poll() ?: break
+                handleCommand(command, value)
+            }
+            val frequency = pendingFrequency.getAndSet(null)
+            if (frequency != null) handleCommand(commandSetFrequency, frequency.first, frequency.second)
+        }
+    }
+
+    //Starts the SDR in receive mode and gets the IQ samples before offering them to the
     //output stream. No buffer: the client app is responsible for getting the samples
     //fast enough
     private suspend fun sendIqSamples(outputStream: OutputStream?) {
@@ -357,11 +403,24 @@ class DriverService : Service() {
                 setRawMode(true)
                 LogParameters.appendLine("$logTag, raw mode set")
             }
-            if (rfSource is Airspy) byteReceivedQueue = rfSource?.startRX()
+            if (rfSource is RtlSdr) {
+                rfSource?.apply {
+                    if (rtlPpm != 0) setFreqCorrection(rtlPpm)
+                    setTunerGainMode(rtlTunerGain != 0)
+                    if (rtlTunerGain != 0) setTunerGain(rtlTunerGain)
+                }
+                LogParameters.appendLine("$logTag, RTL-SDR ppm: $rtlPpm, tuner gain: ${if (rtlTunerGain == 0) "auto" else rtlTunerGain / 10.0}")
+            }
+            if (rfSource is Airspy || rfSource is RtlSdr) byteReceivedQueue = rfSource?.startRX()
+            receiveStarted.complete(Unit)
             while (driverIsrunning) {
 
-                val receivedBytes: ByteArray? = byteReceivedQueue?.poll(1000, TimeUnit.MILLISECONDS)
-                if (receivedBytes == null || receivedBytes.isEmpty()) break
+                val receivedBytes: ByteArray? = byteReceivedQueue?.poll(5000, TimeUnit.MILLISECONDS) //1000
+                //LogParameters.appendLine("$logTag, ReceivedBytes: ${receivedBytes?.size}")
+                if (receivedBytes == null || receivedBytes.isEmpty()) {
+                    LogParameters.appendLine("$logTag, ReceivedBytes is null or empty: ${receivedBytes?.size}")
+                    break
+                }
 
                 outputStream?.apply {
                     write(receivedBytes)
@@ -376,11 +435,28 @@ class DriverService : Service() {
     }
 
     //After receiving a command, this function will process it
-    private fun handleCommand(command: Int, value: Long) {
+    //retuneNumber: number of the frequency command (commandSetFrequency only)
+    private fun handleCommand(command: Int, value: Long, retuneNumber: Int = 0) {
         val boolVal: Boolean = value != 0L
         try {
             val result = when (command) {
-                commandSetFrequency -> "Frequency set to $value: ${rfSource?.setFrequency(value)}"
+                commandSetFrequency -> "Frequency set to $value: ${rfSource?.setFrequency(value, if (retuneCodesEnabled) retuneCode(value, retuneNumber) else null)}"
+                commandEnableRetuneCodes -> {
+                    retuneCodesEnabled = true
+                    "Retune codes enabled"
+                }
+                commandSetGainMode -> "Gain mode set to $value: ${rfSource?.setTunerGainMode(boolVal)}"
+                commandSetGain -> "Gain set to $value: ${rfSource?.setTunerGain(value.toInt())}"
+                commandSetFreqCorrection -> "Frequency correction set to $value: ${rfSource?.setFreqCorrection(value.toInt())}"
+                commandSetIfTunerGain -> "IF gain set to $value: ${rfSource?.setTunerIfGain((value shr 16).toInt(), (value and 0xffff).toInt().toShort().toInt())}"
+                commandSetTestMode -> "Test mode set to $value: ${rfSource?.setTestMode(boolVal)}"
+                commandSetAgcMode -> "AGC mode set to $value: ${rfSource?.setAgcMode(boolVal)}"
+                commandSetDirectSampling -> "Direct sampling set to $value: ${rfSource?.setDirectSampling(value.toInt())}"
+                commandSetOffsetTuning -> "Offset tuning set to $value: ${rfSource?.setOffsetTuning(boolVal)}"
+                commandSetRtlXtal -> "RTL xtal set to $value: ${rfSource?.setXtalFreq(value.toInt(), 0)}"
+                commandSetTunerXtal -> "Tuner xtal set to $value: ${rfSource?.setXtalFreq(0, value.toInt())}"
+                commandSetTunerGainById -> "Gain index set to $value: ${rfSource?.setTunerGainByIndex(value.toInt())}"
+                commandSetAndroidGainByPercentage -> "Gain percentage set to $value: ${rfSource?.setTunerGainByPercentage(value.toInt())}"
                 commandSetVgaGain -> "VGA gain set to $value: ${rfSource?.setRxVGAGain(value.toInt())}"
                 commandSetLnaGain -> "LNA gain set to $value: ${rfSource?.setRxLNAGain(value.toInt())}"
                 commandSetMixerGain -> "Mixer gain set to $value: ${rfSource?.setRxMixerGain(value.toInt())}"
@@ -393,7 +469,6 @@ class DriverService : Service() {
                     closeEverything()
                     "Received EXIT command. Closing..."
                 }
-
                 else -> "Unknown command: $command - $value"
             }
             if (command != commandSetFrequency) LogParameters.appendLine("$logTag, $result")
@@ -402,6 +477,17 @@ class DriverService : Service() {
             closeEverything()
         }
     }
+
+    //Retune code put in the IQ stream right before the first sample of the new frequency, for
+    //a client that sent commandEnableRetuneCodes: after a frequency command, the client drops
+    //the samples until the code with the number of that command (see Commands.kt). Without
+    //it, other rtl_tcp clients get the samples only
+    private fun retuneCode(frequency: Long, number: Int): ByteArray =
+        ByteBuffer.allocate(retuneCodeSize)
+            .put(retuneCodeMagic)
+            .putInt(frequency.toInt())
+            .putInt(number)
+            .array()
 
     private fun closeEverything() {
         if (driverIsrunning) {
@@ -422,6 +508,9 @@ class DriverService : Service() {
 
                 commandJob?.cancel()
                 commandJob = null
+
+                applyCommandsJob?.cancel()
+                applyCommandsJob = null
 
                 receiveJob?.cancel()
                 receiveJob = null

@@ -62,3 +62,11 @@ const val commandSetVgaGain = 0x30  // 48
 const val commandSetAntennaPowerEnable = 0x32  // 50
 
 const val commandSetPacketSize = 0x33 // 51
+
+//SDRBridge retune codes: once the client sends commandEnableRetuneCodes, each retune puts a
+//retune code in the IQ stream, right before the first sample of the new frequency (see
+//DriverService.retuneCode()): retuneCodeMagic, then the frequency and the number of the
+//frequency command (1 for the first one received), both as big-endian 32-bit integers
+const val commandEnableRetuneCodes = 0x40 // 64
+const val retuneCodeSize = 16
+val retuneCodeMagic = byteArrayOf(0x53, 0x44, 0x52, 0x42, 0x32, 0x38, 0x30, 0x32) // "SDRB2802"

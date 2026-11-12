@@ -33,9 +33,9 @@ package com.compasseur.sdrbridge.rfsource
 interface RfSourceCallbackInterface {
 
     /**
-     * Called by initHackrf() after the device is ready to be used.
+     * Called by initHackrf() (or other sdr) after the device is ready to be used.
      *
-     * @param sourcerf Instance of the HackRF that provides access to the device
+     * @param sourcerf Instance of the HackRF (or other sdr) that provides access to the device
      */
     fun onRfSourceReady(sourcerf: RfSource)
 

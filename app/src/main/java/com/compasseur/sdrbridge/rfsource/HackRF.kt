@@ -8,6 +8,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.hardware.usb.UsbRequest
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import com.compasseur.sdrbridge.LogParameters
@@ -22,6 +23,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 
@@ -76,6 +78,16 @@ class HackRF
     private var usbEndpointOUT: UsbEndpoint? = null
 
     private var transceiverMode: Int = HACKRF_TRANSCEIVER_MODE_OFF // current mode of the HackRF
+    @Volatile
+    private var dropSamplesUntil = 0L // uptime (ms) until which received samples are dropped, see setFrequency()
+    // Increased at the start of each retune while receiving, after dropSamplesUntil: a USB
+    // request accepted before a retune and queued after it is dropped (receiveLoop)
+    @Volatile
+    private var retuneCount = 0L
+    // USB requests still dropped after a retune : see endDrop()
+    private val requestsToSkip = AtomicInteger(0)
+    // Queuing a packet and emptying the queue at the end of a retune don't overlap
+    private val queueLock = Any()
     private var queue: ArrayBlockingQueue<ByteArray>? = null  // queue that buffers samples to pass them
     private var bufferPool: ArrayBlockingQueue<ByteArray>? = null  // queue that holds old buffers which can be reused while receiving or transmitting samples
 
@@ -126,6 +138,9 @@ class HackRF
 
         private const val LOGTAG = "hackrf_android"
         private const val NUM_USB_REQUEST = 4 // Number of parallel UsbRequests
+
+        // Samples dropped for this long after a retune while receiving: the HackRF settles.
+        private const val RETUNE_DROP_MILLIS: Long = 5
     }
 
     init {
@@ -137,7 +152,7 @@ class HackRF
             // Extract interface from the device:
             this.usbInterface = usbDevice.getInterface(0)
 
-            // For detailed trouble shooting: Read out interface information of the device:
+            // read out interface information of the device:
             Log.i(LOGTAG, "constructor: [interface 0] interface protocol: ${usbInterface!!.interfaceProtocol} subclass: ${usbInterface!!.interfaceSubclass}")
             Log.i(LOGTAG, "constructor: [interface 0] interface class: ${usbInterface!!.interfaceClass}")
             Log.i(LOGTAG, "constructor: [interface 0] endpoint count: ${usbInterface!!.endpointCount}")
@@ -146,7 +161,7 @@ class HackRF
             this.usbEndpointIN = usbInterface!!.getEndpoint(0)
             this.usbEndpointOUT = usbInterface!!.getEndpoint(1)
 
-            // For detailed trouble shooting: Read out endpoint information of the interface:
+            // read out endpoint information of the interface:
             Log.i(
                 LOGTAG,
                 "constructor:     [endpoint 0 (IN)] address: ${usbEndpointIN!!.address} attributes: ${usbEndpointIN!!.attributes} direction: ${usbEndpointIN!!.direction} max_packet_size: ${usbEndpointIN!!.maxPacketSize}"
@@ -198,7 +213,7 @@ class HackRF
                 index,
                 buffer,
                 len,
-                1000  // Add a reasonable timeout
+                1000  // Add some timeout
             )
         } catch (e: Exception) {
             Log.e(LOGTAG, "USB transfer failed: ${e.message}")
@@ -248,7 +263,6 @@ class HackRF
         return this.queue!!
     }
 
-    //Not implemented
     @Throws(RfSourceException::class)
     override fun startTX(): ArrayBlockingQueue<ByteArray> {
         // Flush the queue
@@ -414,9 +428,35 @@ class HackRF
                 val buffer = request.clientData as ByteBuffer
                 transceivePacketCounter++
 
-                val offered = withTimeoutOrNull(100) {
-                    queue?.offer(buffer.array())
-                } ?: false
+                // Read before dropSamplesUntil (see startDrop())
+                val retune = retuneCount
+                // Every request completed after a retune counts, also the ones dropped by time
+                val skipped = requestsToSkip.get() > 0 && requestsToSkip.getAndDecrement() > 0
+                // Recorded while retuning or settling (see setFrequency()): dropped, and the
+                // request is queued again with the same buffer
+                if (skipped || SystemClock.uptimeMillis() < dropSamplesUntil) {
+                    buffer.clear()
+                    if (!request.queue(buffer)) {
+                        Log.e(LOGTAG, "Failed to queue USB Request")
+                        isRunning = false
+                    }
+                    continue
+                }
+
+                // null: a retune started since this request was accepted, its samples are of
+                // the previous frequency and would reach the client after the retune
+                val offered = synchronized(queueLock) {
+                    if (retuneCount != retune) null else queue?.offer(buffer.array()) ?: false
+                }
+
+                if (offered == null) {
+                    buffer.clear()
+                    if (!request.queue(buffer)) {
+                        Log.e(LOGTAG, "Failed to queue USB Request")
+                        isRunning = false
+                    }
+                    continue
+                }
 
                 if (!offered) {
                     Log.w(LOGTAG, "Queue is full, dropping packet")
@@ -537,7 +577,7 @@ class HackRF
             // Transmitting is done. Cancel and close all USB requests:
             for (request in usbRequests) {
                 request?.cancel()
-                request?.close() // This will cause the VM to crash with a SIGABRT when the next transceive starts?!?
+                request?.close()
             }
         }
     }
@@ -695,8 +735,14 @@ class HackRF
         }
     }
 
+    //While receiving, retunes and makes sure the client app only gets samples of the new
+    //frequency: the samples recorded while retuning and for RETUNE_DROP_MILLIS after are
+    //dropped (receiveLoop), and the packets of the previous frequency still waiting in the
+    //queue. The retune code, queued before the drop ends, tells the client where the new
+    //frequency starts. Nothing is dropped and no code is queued
+    //while transmitting: the queue then holds the samples to transmit.
     @Throws(RfSourceException::class)
-    override fun setFrequency(frequency: Long): Boolean {
+    override fun setFrequency(frequency: Long, retuneCode: ByteArray?): Boolean {
         val byteOut = ByteArrayOutputStream()
         val mhz = (frequency / 1_000_000L).toInt()
         val hz = (frequency % 1_000_000L).toInt()
@@ -708,19 +754,65 @@ class HackRF
             return false
         }
 
-        if (sendUsbRequest(
-                UsbConstants.USB_DIR_OUT,
-                HACKRF_VENDOR_REQUEST_SET_FREQ,
-                0,
-                0,
-                byteOut.toByteArray()
-            ) != 8
-        ) {
-            Log.e(LOGTAG, "setFrequency: USB Transfer failed!")
-            throw RfSourceException("USB Transfer failed!")
+        val receiving = transceiverMode == HACKRF_TRANSCEIVER_MODE_RECEIVE
+        var tuned = false
+        if (receiving) startDrop()
+        try {
+            if (sendUsbRequest(
+                    UsbConstants.USB_DIR_OUT,
+                    HACKRF_VENDOR_REQUEST_SET_FREQ,
+                    0,
+                    0,
+                    byteOut.toByteArray()
+                ) != 8
+            ) {
+                Log.e(LOGTAG, "setFrequency: USB Transfer failed!")
+                throw RfSourceException("USB Transfer failed!")
+            }
+            tuned = true
+        } finally {
+            if (receiving) {
+                // Nothing is queued until endDrop(): the retune code comes right before the new samples
+                dropQueuedSamples(if (tuned) retuneCode else null)
+                endDrop()
+            }
         }
 
         return true
+    }
+
+    //Empties the queue (a retune code still waiting there is dropped too: the client waits for
+    //the code of its latest frequency command), then queues retuneCode
+    private fun dropQueuedSamples(retuneCode: ByteArray? = null) {
+        synchronized(queueLock) {
+            while (true) {
+                val packet = queue?.poll() ?: break
+                if (packet.size == getPacketSize()) returnBufferToBufferPool(packet)
+            }
+            retuneCode?.let { queue?.offer(it) }
+        }
+    }
+
+    //Start of a retune while receiving: the samples are dropped from now on (receiveLoop).
+    //retuneCount is increased after dropSamplesUntil, so that a request that read the old
+    //retuneCount is either dropped by dropSamplesUntil or by the retuneCount check before
+    //queuing. The queued packets (previous frequency) are dropped now too: a send loop held
+    //up during the retune would otherwise still send them, and the client could take its
+    //pause for the retune gap
+    private fun startDrop() {
+        dropSamplesUntil = Long.MAX_VALUE
+        retuneCount++
+        dropQueuedSamples()
+    }
+
+    //End of a retune while receiving: the samples are still dropped for RETUNE_DROP_MILLIS,
+    //and until the NUM_USB_REQUEST in flight were handed over, whichever comes last: they may
+    //all have been filled during the retune, and a slow device can hand them over
+    //late, in a burst. requestsToSkip is set before dropSamplesUntil, so no request gets
+    //between them.
+    private fun endDrop() {
+        requestsToSkip.set(NUM_USB_REQUEST)
+        dropSamplesUntil = SystemClock.uptimeMillis() + RETUNE_DROP_MILLIS
     }
 
     override fun computeBasebandFilterBandwidth(sampRate: Int): Int {
@@ -766,7 +858,7 @@ class HackRF
             return false
         }
 
-        // Must be in steps of two!
+        // Must be in steps of two
         val adjustedGain = if (gain % 2 != 0) gain - (gain % 2) else gain
 
         if (sendUsbRequest(
@@ -789,7 +881,6 @@ class HackRF
         return true
     }
 
-    //Not implemented
     @Throws(RfSourceException::class)
     override fun setTxVGAGain(gain: Int): Boolean {
         val retVal = ByteArray(1)
@@ -828,7 +919,7 @@ class HackRF
             return false
         }
 
-        // Must be in steps of 8!
+        // Must be in steps of 8
         var adjustedGain = gain // Use a mutable variable
         if (adjustedGain % 8 != 0) {
             adjustedGain -= adjustedGain % 8

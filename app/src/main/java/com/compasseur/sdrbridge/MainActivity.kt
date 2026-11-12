@@ -27,6 +27,7 @@ import com.compasseur.sdrbridge.rfsource.RfSource
 import com.compasseur.sdrbridge.rfsource.RfSourceCallbackInterface
 import com.compasseur.sdrbridge.rfsource.RfSourceHolder
 import com.compasseur.sdrbridge.rfsource.Airspy
+import com.compasseur.sdrbridge.rfsource.RtlSdr
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -67,6 +68,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
 
     private var queueSizeHackrf = 1000000 * 2
     private var queueSizeAirspy = 1000000
+    private var queueSizeRtlSdr = 1000000
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,7 +84,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
         val nightMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
         val isDarkTheme = (nightMode == Configuration.UI_MODE_NIGHT_YES)
         WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = !isDarkTheme       // light icons if dark theme
+            isAppearanceLightStatusBars = !isDarkTheme
             isAppearanceLightNavigationBars = !isDarkTheme
         }
 
@@ -91,7 +93,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
             context = this,
             usbManager = usbManager,
             onPermissionGranted = { device ->
-                rfSource = when (device.vendorId) {
+                rfSource = if (isRtl2832uDevice(device.vendorId, device.productId)) RtlSdr(usbManager, device, queueSizeRtlSdr) else when (device.vendorId) {
                     hackRFVendorID if device.productId == hackRFProductID -> HackRF(usbManager, device, queueSizeHackrf)
                     hackRFJawbreakerVendorID if device.productId == hackRFJawbreakerProductID -> HackRF(usbManager, device, queueSizeHackrf)
                     hackRFRad1oVendorID if device.productId == hackRFRad1oProductID -> HackRF(usbManager, device, queueSizeHackrf)
@@ -99,7 +101,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
                     else -> null
                 }
                 rfSource?.initializeRfSource(this, this, device, usbManager, queueSizeHackrf)
-                val deviceDetecte = if (rfSource is HackRF) "HackRF" else if (rfSource is Airspy) "Airspy" else "Nothing"
+                val deviceDetecte = if (rfSource is HackRF) "HackRF" else if (rfSource is Airspy) "Airspy" else if (rfSource is RtlSdr) "RTL-SDR" else "Nothing"
                 LogParameters.appendLine("$logTag, Permission granted for $deviceDetecte, starting service with ${device.productName}")
             },
             onPermissionDenied = {
@@ -107,16 +109,13 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
                 LogParameters.appendLine("$logTag, Permission denied for SDR device.")
             },
             onHackrfDisconnected = { device ->
-                val stopIntent = Intent(this, DriverService::class.java).apply {
-                    action = "ACTION_STOP_DRIVER"
-                }
-                startService(stopIntent)
+                stopService(Intent(this, DriverService::class.java))
                 LogParameters.appendLine("$logTag, SDR device disconnected: ${device.deviceName}")
             }
         )
         usbPermissionManager.registerReceiver()
 
-        //Displays some Log messages on MainActivity XML coming from anywhere in the app
+        //Displays some Log messages
         observeLogParametersChanges()
 
         //Checks if opened MainActivity through an intent or not. If through an intent, MainActivity should stay in
@@ -196,7 +195,7 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
     }
 
     private fun showAbout() {
-        val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "Compasseur", "Privacy policy")
+        val listOfChoices = arrayOf("SDRBridge", "Airspy", "HackRF", "RTL-SDR", "libusb", "Compasseur", "Privacy policy")
 
         AlertDialog.Builder(this).apply {
             setTitle("About " + getString(R.string.version_number))
@@ -205,7 +204,9 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
                     0 -> openWebPage("https://github.com/compasseur/SDRBridge")
                     1 -> showLicenseDialog("Airspy license", getString(R.string.airspy_license))
                     2 -> showLicenseDialog("HackRF license", getString(R.string.hackrf_license))
-                    3 -> openWebPage("https://www.compasseur.com")
+                    3 -> showLicenseDialog("RTL-SDR license", getString(R.string.rtlsdr_license))
+                    4 -> showLicenseDialog("libusb license", getString(R.string.libusb_license))
+                    5 -> openWebPage("https://www.compasseur.com")
                     else -> openWebPage("https://www.compasseur.com/sdr-bridge-privacy-policy/")
                 }
                 dialogInterface.dismiss()

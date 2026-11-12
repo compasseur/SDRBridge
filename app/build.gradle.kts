@@ -6,19 +6,32 @@ plugins {
 android {
     namespace = "com.compasseur.sdrbridge"
     compileSdk = 36
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "com.compasseur.sdrbridge"
         minSdk = 29
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.17"
+        versionCode = 10
+        versionName = "2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
+
+    //librtlsdr + libusb for RTL2832U based dongles (see src/main/cpp)
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
 
     buildTypes {
         release {

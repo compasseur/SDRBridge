@@ -13,7 +13,7 @@ import java.security.Provider
 
 /**
  * Module:      UsbPermissionManager
- * Description: Asks and checks for USB access permissions for accessing the HackRF or Airspy
+ * Description: Asks and checks for USB access permissions for accessing the HackRF, Airspy mini or RTL-SDR
  *
  * Copyright (C) 2024 Grégoire de Courtivron
  * License: http://www.gnu.org/licenses/gpl.html GPL version 2 or higher
@@ -41,7 +41,7 @@ class UsbPermissionManager(
     private val onHackrfDisconnected: ((UsbDevice) -> Unit)? = null
 ) {
     companion object {
-        private const val ACTION_USB_PERMISSION = "com.compasseur.USB_PERMISSION"
+        private const val ACTION_USB_PERMISSION = "com.compasseur.sdrbridge.USB_PERMISSION"
     }
 
     private var logTag = "UsbPermissionManagerTag"
@@ -140,6 +140,7 @@ class UsbPermissionManager(
             val permissionIntent = PendingIntent.getBroadcast(
                 context, 0, Intent(ACTION_USB_PERMISSION).setPackage(context.packageName),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+                //PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
             usbManager.requestPermission(device, permissionIntent)
@@ -150,7 +151,9 @@ class UsbPermissionManager(
         return (device.vendorId == hackRFVendorID && device.productId == hackRFProductID) ||
                 (device.vendorId == hackRFJawbreakerVendorID && device.productId == hackRFJawbreakerProductID) ||
                 (device.vendorId == hackRFRad1oVendorID && device.productId == hackRFRad1oProductID) ||
-                (device.vendorId == airspyMiniVendorID && device.productId == airspyMiniProductID)
+                (device.vendorId == airspyMiniVendorID && device.productId == airspyMiniProductID) ||
+                (device.vendorId == tinySAUltraVendorID && device.productId == tinySAUltraProductID) ||
+                isRtl2832uDevice(device.vendorId, device.productId)
     }
 
     fun findRfSourceDevice(): UsbDevice? {
@@ -175,7 +178,9 @@ class UsbPermissionManager(
             if ((vendorId == hackRFVendorID && productId == hackRFProductID) ||
                 (vendorId == hackRFJawbreakerVendorID && productId == hackRFJawbreakerProductID) ||
                 (vendorId == hackRFRad1oVendorID && productId == hackRFRad1oProductID) ||
-                (vendorId == airspyMiniVendorID && productId == airspyMiniProductID)
+                (vendorId == airspyMiniVendorID && productId == airspyMiniProductID) ||
+                (vendorId == tinySAUltraVendorID && productId == tinySAUltraProductID) ||
+                isRtl2832uDevice(vendorId, productId)
             ) {
                 foundDevice = device
                 LogParameters.appendLine("$logTag, Found ${foundDevice?.productName} - ${foundDevice?.vendorId} - ${foundDevice?.productId} - ${foundDevice?.version}")

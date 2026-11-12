@@ -147,8 +147,8 @@ class AirspyInt16Converter(
             try {
                 outputBuffer = outputPoolQueue.poll(1000, TimeUnit.MILLISECONDS)
             } catch (e: InterruptedException) {
-                // Note: If the output buffer pool (filled by the user) is empty and the timeout is hit,
-                // we just wait again. After some time the Airspy class will stop because its usbQueue
+                // if the output buffer pool (filled by the user) is empty and the timeout is hit,
+                // we just wait again.After some time the Airspy class will stop because its usbQueue
                 // will run full.
                 Log.e(LOGTAG, "run: Interrupted while waiting for buffers in the output pool. Lets wait for another round...")
                 continue

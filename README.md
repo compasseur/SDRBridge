@@ -1,4 +1,4 @@
-SDRBridge acts as a driver for the Airspy Mini and HackRF One SDR.
+SDRBridge acts as a driver for the Airspy Mini, HackRF One and RTL2832U based SDR (R820T, R820T2, R860, R828D tuners, including the RTL-SDR Blog V4).
 
 It works the same way as the rtl_tcp driver by [SignalWareLtd](https://github.com/signalwareltd/rtl_tcp_andro-)
 The driver connects to the SDR through an OTG cable and then sends the IQ samples through a local TCP server.
@@ -38,6 +38,11 @@ When in transmit mode, the client app can not send commands as the output stream
 The Airspy can not transmit.
 
 When using an Airspy Mini, the driver can only send Raw samples.
+
+When using an RTL-SDR, the driver sends the raw 8 bits unsigned IQ samples, preceded by the 12 bytes rtl_tcp header ("RTL0", tuner type, number of gains).
+Two optional intent parameters are available: "g" (tuner gain in tenths of dB, 0 = automatic gain) and "ppm" (frequency correction).
+The RTL-SDR also accepts the rtl_tcp commands (gain mode, gain, frequency correction, IF gain, AGC, direct sampling, offset tuning, xtal, gain by index, gain by percentage). Its bias-T is switched with the "set antenna power" command.
+The RTL-SDR can not transmit.
 
 The driver allows to specifiy a custom usb request buffer size size for receiving samples (both Airspy and HackRF) (default is 1024 * 16).
 

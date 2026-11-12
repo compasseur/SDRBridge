@@ -27,6 +27,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Lets the user choose "Always open SDRBridge" for these devices, so the USB
+             permission survives reconnecting the dongle. Invisible: it closes right away and
+             doesn't bring SDRBridge to the front -->
+        <activity android:name=".UsbAttachedActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:noHistory="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
+        </activity>
         <activity android:name=".IntentHandlerActivity"
             android:exported="true"
             android:launchMode="singleInstance">
