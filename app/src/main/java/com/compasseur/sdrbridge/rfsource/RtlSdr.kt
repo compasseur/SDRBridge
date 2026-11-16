@@ -171,6 +171,25 @@ class RtlSdr(private val usbManager: UsbManager, private val usbDevice: UsbDevic
         init {
             System.loadLibrary("rtlsdrbridge")
         }
+
+        // Gain offset: the tuner's VGA (IF amplifier) lowered by vgaReductionSteps steps of
+        // ~3.4 dB, set from the main screen and kept in the preferences. Applied at the next
+        // retune or gain change.
+        const val vgaStepDb = 3.4
+        const val maxVgaReductionSteps = 6
+        private const val prefsName = "rtlsdr"
+        private const val prefVgaReduction = "vga_reduction_steps"
+
+        @JvmStatic
+        private external fun nativeSetVgaReduction(steps: Int)
+
+        fun getVgaReduction(context: Context): Int =
+            context.getSharedPreferences(prefsName, Context.MODE_PRIVATE).getInt(prefVgaReduction, 0)
+
+        fun setVgaReduction(context: Context, steps: Int) {
+            context.getSharedPreferences(prefsName, Context.MODE_PRIVATE).edit().putInt(prefVgaReduction, steps).apply()
+            nativeSetVgaReduction(steps)
+        }
     }
 
     init {
@@ -184,6 +203,7 @@ class RtlSdr(private val usbManager: UsbManager, private val usbDevice: UsbDevic
             val connection = usbManager.openDevice(usbDevice)
                 ?: throw RfSourceException("Couldn't open RTL-SDR USB Device: openDevice() returned null!")
             synchronized(deviceLock) {
+                nativeSetVgaReduction(getVgaReduction(context))
                 handle = nativeOpen(connection.fileDescriptor, usbDevice.deviceName)
                 tunerGains = nativeGetTunerGains(handle)
             }

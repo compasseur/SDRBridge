@@ -1176,6 +1176,20 @@ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain)
 	return 0;
 }
 
+/* SDRBridge: VGA (IF amplifier) reduction in steps of ~3.4 dB below the fixed 16.3 dB
+ * (register 0x0c = 0x08), set from the app (see rtlsdr_set_vga_reduction()). Lowers how
+ * strong every signal reads, for clients whose lowest gain setting is still too hot. */
+static int r82xx_vga_reduction = 0;
+
+void r82xx_set_vga_reduction(int steps)
+{
+	if (steps < 0)
+		steps = 0;
+	if (steps > 8)
+		steps = 8;
+	r82xx_vga_reduction = steps;
+}
+
 int r82xx_set_vga_gain(struct r82xx_priv *priv) {
 
 	int rc;
@@ -1193,7 +1207,7 @@ int r82xx_set_vga_gain(struct r82xx_priv *priv) {
 		rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); // 16.3 dB
 	}*/
 
-	rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); // 16.3 dB
+	rc = r82xx_write_reg_mask(priv, 0x0c, 0x08 - r82xx_vga_reduction, 0x9f); // 16.3 dB, minus the reduction
 
 	return rc;
 }

@@ -136,6 +136,18 @@ class MainActivity : AppCompatActivity(), RfSourceCallbackInterface {
                 LogParameters.clearLog()
             }
 
+            //RTL-SDR gain offset: each tap lowers the gain one step more, back to 0 after the last one
+            fun showGainOffset(steps: Int) {
+                btnGainOffset.text = if (steps == 0) "RTL-SDR gain offset: 0 dB (tap to lower)"
+                else "RTL-SDR gain offset: -%.1f dB".format(steps * RtlSdr.vgaStepDb)
+            }
+            showGainOffset(RtlSdr.getVgaReduction(this@MainActivity))
+            btnGainOffset.setOnClickListener {
+                val next = (RtlSdr.getVgaReduction(this@MainActivity) + 1) % (RtlSdr.maxVgaReductionSteps + 1)
+                RtlSdr.setVgaReduction(this@MainActivity, next)
+                showGainOffset(next)
+                LogParameters.appendLine("$logTag, RTL-SDR gain offset set to -%.1f dB (applied at the next retune or gain change)".format(next * RtlSdr.vgaStepDb))
+            }
             btnAbout.setOnClickListener {
                 showAbout()
             }
