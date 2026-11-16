@@ -40,6 +40,14 @@
 
     </LinearLayout>
 
+    <Button
+        android:id="@+id/btn_gain_offset"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="1dp"
+        android:backgroundTint="@color/color_3"
+        android:text="RTL-SDR gain offset: 0 dB" />
+
     <ScrollView
         android:id="@+id/scrollview"
         android:layout_width="match_parent"

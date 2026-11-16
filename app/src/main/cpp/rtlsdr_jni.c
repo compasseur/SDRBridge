@@ -242,3 +242,12 @@ JNIEXPORT jint JNICALL
 JNI_FN(nativeTunerLocked)(JNIEnv *env, jobject thiz, jlong handle) {
     return rtlsdr_tuner_locked(DEV(handle));
 }
+
+// SDRBridge: VGA reduction in ~3.4 dB steps, applied at the next retune or gain change
+// (see r82xx_set_vga_reduction()). Static: no device needed, the setting is global.
+void r82xx_set_vga_reduction(int steps);
+
+JNIEXPORT void JNICALL
+Java_com_compasseur_sdrbridge_rfsource_RtlSdr_nativeSetVgaReduction(JNIEnv *env, jclass clazz, jint steps) {
+    r82xx_set_vga_reduction(steps);
+}
