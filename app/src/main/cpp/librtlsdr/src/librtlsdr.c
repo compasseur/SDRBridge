@@ -812,8 +812,29 @@ int rtlsdr_get_usb_strings(rtlsdr_dev_t *dev, char *manufact, char *product,
 	device = libusb_get_device(dev->devh);
 
 	r = libusb_get_device_descriptor(device, &dd);
-	if (r < 0)
-		return -1;
+
+	/* SDRBridge: on Android the device comes from libusb_get_device2(), which doesn't
+	 * read the descriptors (apps can't read them from /dev/bus/usb or sysfs): the
+	 * cached device descriptor is all zeros, so the string indices were 0 and the
+	 * manufacturer and product strings stayed empty. The RTL-SDR Blog V4 was then not
+	 * recognized: its R828D was run with the 16 MHz crystal of generic R828D dongles
+	 * instead of 28.8 MHz (every frequency off by a factor 1.8, PLL not locking) and
+	 * without the V4 input switching. Ask the device for its descriptor instead, with a
+	 * control transfer on the opened handle. */
+	if (r < 0 || dd.idVendor == 0) {
+		uint8_t desc[LIBUSB_DT_DEVICE_SIZE];
+
+		r = libusb_get_descriptor(dev->devh, LIBUSB_DT_DEVICE, 0, desc, sizeof(desc));
+		if (r < (int)sizeof(desc))
+			return -1;
+
+		memset(&dd, 0, sizeof(dd));
+		dd.idVendor = desc[8] | (desc[9] << 8);
+		dd.idProduct = desc[10] | (desc[11] << 8);
+		dd.iManufacturer = desc[14];
+		dd.iProduct = desc[15];
+		dd.iSerialNumber = desc[16];
+	}
 
 	if (manufact) {
 		memset(manufact, 0, buf_max);
