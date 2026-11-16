@@ -533,15 +533,19 @@ static int r82xx_set_pll(struct r82xx_priv *priv, uint32_t freq)
 	vco_fine_tune = (data[4] & 0x30) >> 4;
 
 	/* SDRBridge: the fine tune status comes from the VCO at the previous frequency. When
-	 * that retune didn't lock, it is meaningless (it read 3 instead of 2 after each lock
-	 * failure) and the adjustment below picked the wrong divider: the tuner then went to
-	 * twice the requested frequency. Only adjust after a locked retune. */
-	if (priv->has_lock) {
-		if (vco_fine_tune > vco_power_ref)
-			div_num = div_num - 1;
-		else if (vco_fine_tune < vco_power_ref)
-			div_num = div_num + 1;
-	}
+	 * that retune didn't lock (or before the first retune), it is meaningless (it read 3
+	 * instead of 2 after each lock failure) and the adjustment below picked the wrong
+	 * divider: the tuner then went to twice the requested frequency. Use the status of a
+	 * locked VCO (2) instead. It must not skip the adjustment: the R828D
+	 * (vco_power_ref = 1) always needs div_num - 1, without it the PLL never locks. On
+	 * the R820T (vco_power_ref = 2) the value 2 gives no adjustment. */
+	if (!priv->has_lock)
+		vco_fine_tune = 2;
+
+	if (vco_fine_tune > vco_power_ref)
+		div_num = div_num - 1;
+	else if (vco_fine_tune < vco_power_ref)
+		div_num = div_num + 1;
 
 	vco_freq = (uint64_t)freq * (uint64_t)mix_div;
 	nint = vco_freq / (2 * pll_ref);
