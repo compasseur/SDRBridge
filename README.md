@@ -1,4 +1,4 @@
-SDRBridge is an Android driver app for these SDR dongles:                                                                                                                                                    
+SDR Bridge is an Android driver app for these SDR dongles:                                                                                                                                                    
   - **HackRF One** (receive and transmit)                                                                                                    
   - **Airspy Mini** (receive)                                                                                                                
   - **RTL2832U based dongles** with R820T, R820T2, R860 or R828D tuners, including the RTL-SDR Blog V4 (receive)
@@ -41,7 +41,7 @@ Launch an intent:
 After receiving an intent, the driver looks for a connected compatible SDR and checks the USB permission before connecting and starting to receive IQ samples.                                        
 
 
-When an SDR is plugged in, Android offers to open SDRBridge. If "Always open SDRBridge" is chosen, the USB permission is then granted automatically on every reconnection, without the permission dialog.
+When an SDR is plugged in, Android offers to open SDR Bridge. If "Always open SDRBridge" is chosen, the USB permission is then granted automatically on every reconnection, without the permission dialog.
 
 Intent parameters                                                                                                                            
 
